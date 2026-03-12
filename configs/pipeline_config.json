@@ -1,0 +1,88 @@
+{
+    "_comment": "DORSAL ML Pipeline — Configuration",
+    "_version": "1.0",
+    "_hardware": "Ryzen 7 5800x (16 threads, 32GB RAM)",
+
+    "data_sources": {
+        "payloads_dir": "./data/PayloadAllTheThings",
+        "seclists_dir": "./data/SecLists",
+        "dast_dir": "./data/dast",
+        "telemetry_dir": "./data/telemetry"
+    },
+
+    "dataset": {
+        "output_dir": "./data",
+        "normal_count": 100000,
+        "attack_ratio": 0.2,
+        "max_per_category": 5000,
+        "format": "parquet"
+    },
+
+    "model": {
+        "algorithm": "RandomForestClassifier",
+        "n_estimators": 200,
+        "max_depth": 15,
+        "class_weight": "balanced",
+        "n_jobs": -1,
+        "random_state": 42,
+        "output_format": "onnx",
+        "output_dir": "./models"
+    },
+
+    "validation": {
+        "min_precision": 0.90,
+        "min_recall": 0.85,
+        "max_fpr": 0.05,
+        "max_latency_p99_ms": 2.0,
+        "inference_iterations": 10000,
+        "test_size": 0.20
+    },
+
+    "agents": {
+        "strix": {
+            "enabled": true,
+            "nvd_api_key": null,
+            "days_back": 14,
+            "payloads_per_cve": 5
+        },
+        "shannon": {
+            "enabled": true,
+            "mislabel_z_threshold": 3.0
+        }
+    },
+
+    "retrain": {
+        "schedule": "0 2 * * 0",
+        "clickhouse_host": "clickhouse.dorsal.internal",
+        "telemetry_days": 14,
+        "rollback_fpr_threshold": 1.10,
+        "cleanup_datasets_days": 30,
+        "cleanup_models_days": 90
+    },
+
+    "gateway_integration": {
+        "model_path": "gateway/dorsal/ml/models/attack_v1.onnx",
+        "docker_registry": "ghcr.io/sharkzone/dorsal",
+        "auto_build": true,
+        "auto_push": true
+    },
+
+    "privacy": {
+        "_note": "Payloads dos clientes NUNCA saem da infraestrutura deles",
+        "telemetry_opt_in_required": true,
+        "data_sent_to_control_plane": [
+            "distribuições estatísticas (média/desvio)",
+            "contadores de threats por tipo",
+            "anomaly scores médios por hora",
+            "hash do endpoint (NUNCA o path real)"
+        ],
+        "data_never_sent": [
+            "IPs reais",
+            "payloads originais",
+            "paths completos",
+            "user-agents completos",
+            "dados de usuários",
+            "conteúdo de requests/responses"
+        ]
+    }
+}
