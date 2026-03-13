@@ -1,0 +1,169 @@
+name: dorsal-layer1-lab
+
+services:
+  vuln-juice-shop:
+    image: bkimminich/juice-shop:latest
+    restart: unless-stopped
+    networks: [lab_net]
+
+  safe-httpbin:
+    image: mccutchen/go-httpbin:v2.15.0
+    restart: unless-stopped
+    command: ["-port", "8080"]
+    networks: [lab_net]
+
+  safe-petstore:
+    image: swaggerapi/petstore3:latest
+    restart: unless-stopped
+    networks: [lab_net]
+
+  gateway-juice:
+    build:
+      context: ../dorsal/gateway
+    restart: unless-stopped
+    depends_on: [vuln-juice-shop]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DORSAL_UPSTREAM: http://vuln-juice-shop:3000
+      DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
+      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_JUICE:?set_gateway_api_key}
+      DORSAL_GATEWAY_ID: gw_lab_juice
+      DORSAL_TENANT_HASH: tenant_lab
+      DORSAL_MODE: proxy
+      DORSAL_FAIL_OPEN: "true"
+      DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
+      DORSAL_ML_ENABLED: "true"
+      DORSAL_PII_ENABLED: "true"
+      DORSAL_LAYER2_ENABLED: "true"
+      DORSAL_SYNC_INTERVAL_SECONDS: "30"
+      DORSAL_ML_ROLLOUT_MODE: ${DORSAL_ML_ROLLOUT_MODE:-shadow}
+      DORSAL_ML_ROLLOUT_PERCENT: ${DORSAL_ML_ROLLOUT_PERCENT:-20}
+      DORSAL_ML_ALERT_THRESHOLD: ${DORSAL_ML_ALERT_THRESHOLD:-0.55}
+      DORSAL_ML_BLOCK_THRESHOLD: ${DORSAL_ML_BLOCK_THRESHOLD:-0.85}
+      DORSAL_ML_ANOMALY_WEIGHT: ${DORSAL_ML_ANOMALY_WEIGHT:-0.30}
+    ports:
+      - "18081:8080"
+    networks: [lab_net]
+
+  gateway-httpbin:
+    build:
+      context: ../dorsal/gateway
+    restart: unless-stopped
+    depends_on: [safe-httpbin]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DORSAL_UPSTREAM: http://safe-httpbin:8080
+      DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
+      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_HTTPBIN:?set_gateway_api_key}
+      DORSAL_GATEWAY_ID: gw_lab_httpbin
+      DORSAL_TENANT_HASH: tenant_lab
+      DORSAL_MODE: proxy
+      DORSAL_FAIL_OPEN: "true"
+      DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
+      DORSAL_ML_ENABLED: "true"
+      DORSAL_PII_ENABLED: "true"
+      DORSAL_LAYER2_ENABLED: "true"
+      DORSAL_SYNC_INTERVAL_SECONDS: "30"
+      DORSAL_ML_ROLLOUT_MODE: ${DORSAL_ML_ROLLOUT_MODE:-shadow}
+      DORSAL_ML_ROLLOUT_PERCENT: ${DORSAL_ML_ROLLOUT_PERCENT:-20}
+      DORSAL_ML_ALERT_THRESHOLD: ${DORSAL_ML_ALERT_THRESHOLD:-0.55}
+      DORSAL_ML_BLOCK_THRESHOLD: ${DORSAL_ML_BLOCK_THRESHOLD:-0.85}
+      DORSAL_ML_ANOMALY_WEIGHT: ${DORSAL_ML_ANOMALY_WEIGHT:-0.30}
+    ports:
+      - "18082:8080"
+    networks: [lab_net]
+
+  gateway-petstore:
+    build:
+      context: ../dorsal/gateway
+    restart: unless-stopped
+    depends_on: [safe-petstore]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DORSAL_UPSTREAM: http://safe-petstore:8080
+      DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
+      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_PETSTORE:?set_gateway_api_key}
+      DORSAL_GATEWAY_ID: gw_lab_petstore
+      DORSAL_TENANT_HASH: tenant_lab
+      DORSAL_MODE: proxy
+      DORSAL_FAIL_OPEN: "true"
+      DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
+      DORSAL_ML_ENABLED: "true"
+      DORSAL_PII_ENABLED: "true"
+      DORSAL_LAYER2_ENABLED: "true"
+      DORSAL_SYNC_INTERVAL_SECONDS: "30"
+      DORSAL_ML_ROLLOUT_MODE: ${DORSAL_ML_ROLLOUT_MODE:-shadow}
+      DORSAL_ML_ROLLOUT_PERCENT: ${DORSAL_ML_ROLLOUT_PERCENT:-20}
+      DORSAL_ML_ALERT_THRESHOLD: ${DORSAL_ML_ALERT_THRESHOLD:-0.55}
+      DORSAL_ML_BLOCK_THRESHOLD: ${DORSAL_ML_BLOCK_THRESHOLD:-0.85}
+      DORSAL_ML_ANOMALY_WEIGHT: ${DORSAL_ML_ANOMALY_WEIGHT:-0.30}
+    ports:
+      - "18083:8080"
+    networks: [lab_net]
+
+  traffic-legit-sim:
+    build:
+      context: ./traffic
+    command: ["python", "/app/legit_traffic.py"]
+    restart: "no"
+    depends_on: [gateway-juice, gateway-httpbin, gateway-petstore]
+    environment:
+      GW_JUICE_URL: http://gateway-juice:8080
+      GW_HTTPBIN_URL: http://gateway-httpbin:8080
+      GW_PETSTORE_URL: http://gateway-petstore:8080
+      USER_SIM_DURATION_MINUTES: ${USER_SIM_DURATION_MINUTES:-45}
+      USER_SIM_RPS: ${USER_SIM_RPS:-3}
+      USER_SIM_CONCURRENCY: ${USER_SIM_CONCURRENCY:-12}
+      REQUEST_LOG_PATH: /lab-artifacts/gateway/legit_requests.jsonl
+      HARD_NEGATIVE_PATH: /lab-artifacts/hard_negatives/legit_hard_negatives.jsonl
+    volumes:
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["traffic", "full"]
+    networks: [lab_net]
+
+  attack-zap-baseline:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      mkdir -p /zap/wrk &&
+      zap-baseline.py -t http://gateway-juice:8080 -J /zap/wrk/zap_juice.json -r /zap/wrk/zap_juice.html -I || true &&
+      zap-baseline.py -t http://gateway-httpbin:8080 -J /zap/wrk/zap_httpbin.json -r /zap/wrk/zap_httpbin.html -I || true &&
+      zap-baseline.py -t http://gateway-petstore:8080 -J /zap/wrk/zap_petstore.json -r /zap/wrk/zap_petstore.html -I || true
+    depends_on: [gateway-juice, gateway-httpbin, gateway-petstore]
+    volumes:
+      - ../data/dast/zap:/zap/wrk
+    profiles: ["attacks", "full"]
+    networks: [lab_net]
+
+  attack-ai-redteam:
+    build:
+      context: ./traffic
+    command: ["python", "/app/ai_redteam_agent.py"]
+    restart: "no"
+    depends_on: [gateway-juice, gateway-httpbin, gateway-petstore]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      GW_JUICE_URL: http://gateway-juice:8080
+      GW_HTTPBIN_URL: http://gateway-httpbin:8080
+      GW_PETSTORE_URL: http://gateway-petstore:8080
+      ATTACK_ITERATIONS: ${ATTACK_ITERATIONS:-4}
+      REQUEST_LOG_PATH: /lab-artifacts/gateway/attack_requests.jsonl
+      STRIX_OUTPUT_DIR: /lab-artifacts/strix/run_ai_redteam
+      SHANNON_OUTPUT_DIR: /lab-artifacts/shannon/session_ai_redteam
+      DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
+      DORSAL_TEST_ORG_TOKEN: ${DORSAL_TEST_ORG_TOKEN:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    volumes:
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["attacks", "ai", "full"]
+    networks: [lab_net]
+
+networks:
+  lab_net:
+    driver: bridge

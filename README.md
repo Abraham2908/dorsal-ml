@@ -92,6 +92,8 @@ Saidas adicionais:
 
 Playbook detalhado:
 - `docs/layer1_realworld_playbook.md`
+- `LAB_PLAN.md` (lab completo com gateway + apps + trafego legitimo + campanhas de ataque)
+- `labs/docker-compose.layer1-lab.yml` (stack de laboratorio para coleta realista)
 
 ### 3.4 Schema v2 de dataset (metadados de campanha e confianca)
 

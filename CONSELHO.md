@@ -677,26 +677,34 @@ Fazer:
 
 ## Backlog tecnico que eu atacaria neste repo
 
+Status em 2026-03-13:
+
+- `[x]` implementado
+- `[~]` implementado parcialmente
+- `[ ]` pendente
+
 ### Prioridade P0
 
-1. Expandir contratos em [training/contracts.py](/home/abraham/tools/dorsal-ml/training/contracts.py) para carregar metadados de cenario, app, tier e outcome.
-2. Enriquecer [training/build_dataset.py](/home/abraham/tools/dorsal-ml/training/build_dataset.py) para persistir esses campos de forma consistente.
-3. Evoluir [training/gateway_correlator.py](/home/abraham/tools/dorsal-ml/training/gateway_correlator.py) para produzir tiers de confianca e outcomes separados.
-4. Criar manifesto de campanha/dataset em JSON para cada coleta.
+1. `[x]` Expandir contratos em [training/contracts.py](/home/abraham/tools/dorsal-ml/training/contracts.py) para carregar metadados de cenario, app, tier e outcome.
+2. `[x]` Enriquecer [training/build_dataset.py](/home/abraham/tools/dorsal-ml/training/build_dataset.py) para persistir esses campos de forma consistente.
+3. `[x]` Evoluir [training/gateway_correlator.py](/home/abraham/tools/dorsal-ml/training/gateway_correlator.py) para produzir tiers de confianca e outcomes separados.
+4. `[x]` Criar manifesto de campanha/dataset em JSON para cada coleta.
 
 ### Prioridade P1
 
-1. Adicionar avaliacao por `scenario_type`, `target_app`, `validation_tier` e `attack_family`.
-2. Criar corpus dedicado de hard negatives.
-3. Separar melhor datasets de treino, validacao realista e benchmark.
-4. Criar uma trilha de regressao com apps vulneraveis e endurecidas.
+1. `[x]` Adicionar avaliacao por `scenario_type`, `target_app`, `validation_tier` e `attack_family`.
+2. `[x]` Criar corpus dedicado de hard negatives.
+3. `[x]` Separar melhor datasets de treino, validacao realista e benchmark.
+4. `[~]` Criar uma trilha de regressao com apps vulneraveis e endurecidas.
+   Situacao atual: pipeline realista e governanca prontos; plano operacional e compose do lab documentados em [LAB_PLAN.md](/home/abraham/tools/dorsal-ml/LAB_PLAN.md) e [labs/docker-compose.layer1-lab.yml](/home/abraham/tools/dorsal-ml/labs/docker-compose.layer1-lab.yml), faltando acumulo continuo de campanhas.
 
 ### Prioridade P2
 
-1. Melhorar calibracao de score e thresholds por modo de acao.
-2. Versionar datasets e campanhas com manifestos assinados.
-3. Evoluir a camada global para cohorts de tenants e validacao mais forte.
-4. Introduzir replay continuo de campanhas antigas para detectar regressao.
+1. `[~]` Melhorar calibracao de score e thresholds por modo de acao.
+   Situacao atual: parte de thresholds e rollout por modo ja conectada no runtime/control plane; calibracao estatistica continua por cohort ainda pendente neste repo.
+2. `[ ]` Versionar datasets e campanhas com manifestos assinados.
+3. `[ ]` Evoluir a camada global para cohorts de tenants e validacao mais forte.
+4. `[ ]` Introduzir replay continuo de campanhas antigas para detectar regressao.
 
 ## Conselhos de produto, nao so de ML
 
@@ -734,13 +742,19 @@ Poucos vao construir um sistema melhor de verdade operacional, campaign manifest
 
 Se eu estivesse no seu lugar, eu faria o seguinte com prioridade maxima:
 
-1. Montar imediatamente um lab instrumentado com apps vulneraveis e endurecidas atras do gateway.
-2. Automatizar trafego legitimo com estado, nao apenas requests aleatorias.
-3. Rodar campanhas de ataque com scanners classicos + agentes de IA.
-4. Formalizar manifestos, tiers de validacao e outcomes.
-5. Transformar a Camada 1 em modelo treinado por cenarios reais, nao so por payload repos.
+1. `[~]` Montar imediatamente um lab instrumentado com apps vulneraveis e endurecidas atras do gateway.
+2. `[~]` Automatizar trafego legitimo com estado, nao apenas requests aleatorias.
+3. `[~]` Rodar campanhas de ataque com scanners classicos + agentes de IA.
+4. `[x]` Formalizar manifestos, tiers de validacao e outcomes.
+5. `[~]` Transformar a Camada 1 em modelo treinado por cenarios reais, nao so por payload repos.
 6. Usar a Camada 2 como fonte de verdade local e drift.
 7. Usar a Camada 3 como inteligencia global e score complementar, nao como juiz unico.
+
+Observacao de status para os itens `[~]` acima:
+
+- o design operacional do lab foi materializado em [LAB_PLAN.md](/home/abraham/tools/dorsal-ml/LAB_PLAN.md);
+- o stack de laboratorio foi materializado em [labs/docker-compose.layer1-lab.yml](/home/abraham/tools/dorsal-ml/labs/docker-compose.layer1-lab.yml);
+- os scripts de simulacao legitima e ataque foram materializados em `labs/traffic/`.
 
 ## Conclusao
 
