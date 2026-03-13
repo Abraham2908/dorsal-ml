@@ -17,6 +17,12 @@ ZAP_FILE="${ZAP_FILE:-}"
 ACUNETIX_FILE="${ACUNETIX_FILE:-}"
 STRIX_RUNS_DIR="${STRIX_RUNS_DIR:-}"
 SHANNON_SESSIONS_DIR="${SHANNON_SESSIONS_DIR:-}"
+TARGET_APP="${TARGET_APP:-unknown}"
+LAB_RUN_ID="${LAB_RUN_ID:-}"
+IS_REPLAY="${IS_REPLAY:-0}"
+HARD_NEGATIVES_PATH="${HARD_NEGATIVES_PATH:-}"
+HARD_NEGATIVE_RATIO="${HARD_NEGATIVE_RATIO:-0.0}"
+SCENARIO_PROFILE="${SCENARIO_PROFILE:-default}"
 
 NORMAL_COUNT="${NORMAL_COUNT:-100000}"
 ATTACK_RATIO="${ATTACK_RATIO:-0.2}"
@@ -32,12 +38,17 @@ MIN_RECALL="${MIN_RECALL:-0.85}"
 MAX_FPR="${MAX_FPR:-0.03}"
 MAX_LATENCY_P99_MS="${MAX_LATENCY_P99_MS:-2.0}"
 BENCHMARK_ITERATIONS="${BENCHMARK_ITERATIONS:-10000}"
+SLICE_MIN_SUPPORT="${SLICE_MIN_SUPPORT:-20}"
+SLICE_GATES_CONFIG="${SLICE_GATES_CONFIG:-}"
 
 MODEL_NAME="${MODEL_NAME:-attack_${DATE_TAG}}"
 DATASET_OUT="${DATASET_OUT:-${DATA_DIR}/curated/${MODEL_NAME}.parquet}"
 DATASET_REPORT="${DATASET_REPORT:-${REPORTS_DIR}/${MODEL_NAME}.dataset_report.json}"
+DATASET_MANIFEST="${DATASET_MANIFEST_PATH:-${REPORTS_DIR}/${MODEL_NAME}.dataset_manifest.json}"
 MODEL_OUT="${MODEL_OUT:-${MODELS_DIR}/${MODEL_NAME}.onnx}"
 BENCHMARK_OUT="${BENCHMARK_OUT:-${REPORTS_DIR}/${MODEL_NAME}.benchmark.json}"
+VALIDATION_REPORT="${VALIDATION_REPORT:-${REPORTS_DIR}/${MODEL_NAME}.validation.json}"
+PROMOTION_REPORT="${PROMOTION_REPORT:-${REPORTS_DIR}/${MODEL_NAME}.promotion_decision.json}"
 
 mkdir -p "${DATA_DIR}/curated" "${MODELS_DIR}" "${REPORTS_DIR}" "${MODELS_DIR}/bundles"
 
@@ -51,11 +62,28 @@ BUILD_ARGS=(
   -m training.build_dataset
   --normal-count "${NORMAL_COUNT}"
   --attack-ratio "${ATTACK_RATIO}"
+  --hard-negative-ratio "${HARD_NEGATIVE_RATIO}"
+  --scenario-profile "${SCENARIO_PROFILE}"
   --max-per-category "${MAX_PER_CATEGORY}"
   --campaign-id "${CAMPAIGN_ID}"
+  --target-app "${TARGET_APP}"
   --report-path "${DATASET_REPORT}"
+  --manifest-path "${DATASET_MANIFEST}"
   --output "${DATASET_OUT}"
 )
+
+if [ -n "${LAB_RUN_ID}" ]; then
+  BUILD_ARGS+=(--lab-run-id "${LAB_RUN_ID}")
+fi
+if [ -n "${HARD_NEGATIVES_PATH}" ] && [ -e "${HARD_NEGATIVES_PATH}" ]; then
+  BUILD_ARGS+=(--hard-negatives-path "${HARD_NEGATIVES_PATH}")
+fi
+
+case "${IS_REPLAY,,}" in
+  1|true|yes|on)
+    BUILD_ARGS+=(--is-replay)
+    ;;
+esac
 
 ATTACK_SOURCE_COUNT=0
 
@@ -100,25 +128,40 @@ echo "[L1] Building dataset..."
 "${PYTHON_BIN}" "${BUILD_ARGS[@]}"
 
 echo "[L1] Training attack model..."
-"${PYTHON_BIN}" -m training.train_attack_model \
-  --dataset "${DATASET_OUT}" \
-  --output "${MODEL_OUT}" \
-  --n-estimators "${N_ESTIMATORS}" \
-  --max-depth "${MAX_DEPTH}" \
-  --test-size "${TEST_SIZE}" \
-  --min-precision "${MIN_PRECISION}" \
-  --min-recall "${MIN_RECALL}" \
+TRAIN_ARGS=(
+  -m training.train_attack_model
+  --dataset "${DATASET_OUT}"
+  --output "${MODEL_OUT}"
+  --n-estimators "${N_ESTIMATORS}"
+  --max-depth "${MAX_DEPTH}"
+  --test-size "${TEST_SIZE}"
+  --min-precision "${MIN_PRECISION}"
+  --min-recall "${MIN_RECALL}"
   --max-fpr "${MAX_FPR}"
+  --slice-min-support "${SLICE_MIN_SUPPORT}"
+)
+if [ -n "${SLICE_GATES_CONFIG}" ]; then
+  TRAIN_ARGS+=(--slice-gates-config "${SLICE_GATES_CONFIG}")
+fi
+"${PYTHON_BIN}" "${TRAIN_ARGS[@]}"
 
 echo "[L1] Validating attack model..."
-"${PYTHON_BIN}" -m training.validate_model \
-  --model "${MODEL_OUT}" \
-  --dataset "${DATASET_OUT}" \
-  --min-precision "${MIN_PRECISION}" \
-  --min-recall "${MIN_RECALL}" \
-  --max-fpr "${MAX_FPR}" \
-  --max-latency-p99 "${MAX_LATENCY_P99_MS}" \
+VALIDATE_ARGS=(
+  -m training.validate_model
+  --model "${MODEL_OUT}"
+  --dataset "${DATASET_OUT}"
+  --min-precision "${MIN_PRECISION}"
+  --min-recall "${MIN_RECALL}"
+  --max-fpr "${MAX_FPR}"
+  --max-latency-p99 "${MAX_LATENCY_P99_MS}"
   --iterations "${BENCHMARK_ITERATIONS}"
+  --slice-min-support "${SLICE_MIN_SUPPORT}"
+  --report-json "${VALIDATION_REPORT}"
+)
+if [ -n "${SLICE_GATES_CONFIG}" ]; then
+  VALIDATE_ARGS+=(--slice-gates-config "${SLICE_GATES_CONFIG}")
+fi
+"${PYTHON_BIN}" "${VALIDATE_ARGS[@]}"
 
 echo "[L1] Benchmarking ONNX latency/parity..."
 "${PYTHON_BIN}" -m training.benchmark_inference \
@@ -127,10 +170,18 @@ echo "[L1] Benchmarking ONNX latency/parity..."
   --iterations "${BENCHMARK_ITERATIONS}" \
   --output-json "${BENCHMARK_OUT}"
 
+echo "[L1] Evaluating promotion gate..."
+"${PYTHON_BIN}" -m training.promotion_gate \
+  --train-eval "${MODEL_OUT%.onnx}.eval.json" \
+  --validation-eval "${VALIDATION_REPORT}" \
+  --output "${PROMOTION_REPORT}"
+
 LATEST_MODEL="${MODELS_DIR}/attack_latest.onnx"
 cp "${MODEL_OUT}" "${LATEST_MODEL}"
 cp "${MODEL_OUT%.onnx}.json" "${MODELS_DIR}/attack_latest.json"
 cp "${MODEL_OUT%.onnx}.eval.json" "${MODELS_DIR}/attack_latest.eval.json"
+cp "${VALIDATION_REPORT}" "${MODELS_DIR}/attack_latest.validation.json"
+cp "${PROMOTION_REPORT}" "${MODELS_DIR}/attack_latest.promotion.json"
 cp "${MODEL_OUT%.onnx}.features.json" "${MODELS_DIR}/attack_latest.features.json"
 cp "${MODEL_OUT%.onnx}.manifest.json" "${MODELS_DIR}/attack_latest.manifest.json"
 
@@ -153,3 +204,4 @@ echo "Layer-1 pipeline complete."
 echo "Dataset:   ${DATASET_OUT}"
 echo "Model:     ${MODEL_OUT}"
 echo "Benchmark: ${BENCHMARK_OUT}"
+echo "Promotion: ${PROMOTION_REPORT}"

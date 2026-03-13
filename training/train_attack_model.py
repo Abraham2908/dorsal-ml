@@ -18,6 +18,7 @@ from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit, train_test_split
 
 from training.contracts import ModelArtifactManifest
+from training.slice_metrics import build_slice_report, evaluate_slice_gates, load_slice_gate_rules
 
 try:
     from skl2onnx import convert_sklearn
@@ -134,30 +135,6 @@ def _group_split(
     )
 
 
-def _cross_source_report(df: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray, test_idx: np.ndarray) -> dict:
-    report: dict[str, dict] = {}
-    test_frame = df.iloc[test_idx].copy()
-    test_frame["y_true"] = y_true
-    test_frame["y_pred"] = y_pred
-
-    for column in ("source_family", "category", "campaign_id"):
-        if column not in test_frame.columns:
-            continue
-        grouped = {}
-        for key, part in test_frame.groupby(column):
-            if len(part) < 3:
-                continue
-            p = precision_score(part["y_true"], part["y_pred"], zero_division=0)
-            r = recall_score(part["y_true"], part["y_pred"], zero_division=0)
-            grouped[str(key)] = {
-                "n": int(len(part)),
-                "precision": float(p),
-                "recall": float(r),
-            }
-        report[column] = grouped
-    return report
-
-
 def train_attack_model(
     dataset_path: str,
     output_path: str = "./models/attack_v1.onnx",
@@ -167,6 +144,8 @@ def train_attack_model(
     min_precision: float = 0.92,
     min_recall: float = 0.85,
     max_fpr: float = 0.03,
+    slice_min_support: int = 20,
+    slice_gates_config: str | None = None,
 ) -> dict:
     start = time.time()
     logger.info("Loading dataset...")
@@ -217,7 +196,19 @@ def train_attack_model(
     metrics = _safe_metrics(y_test, y_pred, y_score)
 
     # Cross-campaign/source quality checks
-    slice_report = _cross_source_report(df=df, y_true=y_test, y_pred=y_pred, test_idx=test_idx)
+    slice_report = build_slice_report(
+        df=df,
+        y_true=y_test,
+        y_pred=y_pred,
+        row_indices=test_idx,
+        min_support=3,
+    )
+    gate_rules = load_slice_gate_rules(slice_gates_config)
+    slice_gate_result = evaluate_slice_gates(
+        slice_report=slice_report,
+        gate_rules=gate_rules,
+        default_min_support=slice_min_support,
+    )
 
     cv_mean = None
     cv_std = None
@@ -245,6 +236,7 @@ def train_attack_model(
         metrics["precision"] >= min_precision
         and metrics["recall"] >= min_recall
         and metrics["fpr"] <= max_fpr
+        and slice_gate_result["passed"]
     )
 
     output = Path(output_path)
@@ -274,14 +266,18 @@ def train_attack_model(
             "min_precision": min_precision,
             "min_recall": min_recall,
             "max_fpr": max_fpr,
+            "slice_min_support": slice_min_support,
+            "slice_gates_config": slice_gates_config,
         },
         "overall": metrics,
         "by_slice": slice_report,
         "cv_group_f1": {"mean": cv_mean, "std": cv_std},
+        "slice_gates": slice_gate_result,
         "n_train": int(len(X_train)),
         "n_test": int(len(X_test)),
         "train_time_seconds": float(train_time),
         "passed": bool(passed),
+        "slice_gates_passed": bool(slice_gate_result["passed"]),
     }
 
     features_payload = {
@@ -353,7 +349,11 @@ def train_attack_model(
         },
         latency_budget_ms=2.0,
         intended_runtime="gateway_client_container",
-        eval_summary={"passed": passed, **metrics},
+        eval_summary={
+            "passed": passed,
+            "slice_gates_passed": bool(slice_gate_result["passed"]),
+            **metrics,
+        },
     )
     with open(output.with_suffix(".manifest.json"), "w", encoding="utf-8") as file:
         json.dump(manifest.to_dict(), file, indent=2)
@@ -368,6 +368,7 @@ def train_attack_model(
         "precision": metrics["precision"],
         "recall": metrics["recall"],
         "fpr": metrics["fpr"],
+        "slice_gates_passed": bool(slice_gate_result["passed"]),
     }
 
 
@@ -381,6 +382,8 @@ def main() -> None:
     parser.add_argument("--min-precision", type=float, default=0.92)
     parser.add_argument("--min-recall", type=float, default=0.85)
     parser.add_argument("--max-fpr", type=float, default=0.03)
+    parser.add_argument("--slice-min-support", type=int, default=20)
+    parser.add_argument("--slice-gates-config", help="JSON config path with slice gate rules")
     args = parser.parse_args()
 
     results = train_attack_model(
@@ -392,6 +395,8 @@ def main() -> None:
         min_precision=args.min_precision,
         min_recall=args.min_recall,
         max_fpr=args.max_fpr,
+        slice_min_support=args.slice_min_support,
+        slice_gates_config=args.slice_gates_config,
     )
     sys.exit(0 if results["passed"] else 1)
 

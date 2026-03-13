@@ -20,6 +20,7 @@ if importlib.util.find_spec("numpy") is None:
         [sys.executable, "-m", "training.validate_model", "--help"],
         [sys.executable, "-m", "training.train_anomaly_model", "--help"],
         [sys.executable, "-m", "training.benchmark_inference", "--help"],
+        [sys.executable, "-m", "training.promotion_gate", "--help"],
         [sys.executable, "-m", "training.bundle_packager", "--help"],
         [sys.executable, "scripts/fetch_telemetry.py", "--help"],
     ],

@@ -78,6 +78,9 @@ Variaveis principais (opcionais):
 TRAIN_ATTACK_RATIO=0.20 \
 REALWORLD_ATTACK_RATIO=0.02 \
 REALWORLD_MAX_FPR=0.01 \
+HARD_NEGATIVES_PATH=./data/raw/hard_negatives \
+HARD_NEGATIVE_RATIO=0.25 \
+SLICE_GATES_CONFIG=./configs/slice_gates.example.json \
 make layer1-realworld
 ```
 
@@ -85,9 +88,77 @@ Saidas adicionais:
 - `data/curated/attack_rw_*.train.parquet`
 - `data/curated/attack_rw_*.realworld.parquet`
 - `reports/attack_rw_*.realworld_summary.json`
+- `reports/attack_rw_*.promotion_decision.json`
 
 Playbook detalhado:
 - `docs/layer1_realworld_playbook.md`
+
+### 3.4 Schema v2 de dataset (metadados de campanha e confianca)
+
+O build da Camada 1 agora inclui metadados adicionais no parquet:
+
+- `scenario_type`
+- `target_app`
+- `attack_family`
+- `attack_technique`
+- `validation_tier`
+- `lab_run_id`
+- `effect_outcome`
+- `is_replay`
+
+Campos novos para trilha de benigno dificil:
+
+- `scenario_type=hard_negative`
+- `effect_outcome=benign_confirmed`
+
+Tambem e gerado um manifesto JSON de dataset (audit trail):
+
+- default: `reports/dataset_manifest_<campaign_id>.json`
+- override: `--manifest-path` ou `DATASET_MANIFEST_PATH`
+
+Exemplo com metadados de campanha:
+
+```bash
+TARGET_APP=crapi \
+LAB_RUN_ID=lab_20260313 \
+IS_REPLAY=0 \
+make layer1
+```
+
+Exemplo de uso direto:
+
+```bash
+.venv/bin/python -m training.build_dataset \
+  --payloads-dir ./data/PayloadAllTheThings \
+  --seclists-dir ./data/SecLists \
+  --campaign-id campaign_crapi_v1 \
+  --target-app crapi \
+  --lab-run-id lab_20260313 \
+  --manifest-path ./reports/campaign_crapi_v1.manifest.json \
+  --output ./data/curated/campaign_crapi_v1.parquet
+```
+
+Exemplo com hard negatives e perfil de cenario:
+
+```bash
+.venv/bin/python -m training.build_dataset \
+  --payloads-dir ./data/PayloadAllTheThings \
+  --seclists-dir ./data/SecLists \
+  --hard-negatives-path ./data/raw/hard_negatives \
+  --hard-negative-ratio 0.25 \
+  --scenario-profile b2b \
+  --campaign-id campaign_crapi_v2 \
+  --output ./data/curated/campaign_crapi_v2.parquet
+```
+
+Impacto no gateway nesta fase:
+
+- nenhum ajuste de runtime e necessario;
+- o artefato ONNX de inferencia permanece compativel.
+
+Guia detalhado de upgrade:
+- `docs/p0_schema_upgrade.md`
+- `docs/p1_dataset_governance.md`
 
 ## 4) Treino da Camada 3 (global anomaly)
 
@@ -175,12 +246,14 @@ Depois rode qualquer target (`make layer1`, `make layer3`, `make weekly`).
 .venv/bin/python -m training.validate_model --help
 .venv/bin/python -m training.benchmark_inference --help
 .venv/bin/python -m training.train_anomaly_model --help
+.venv/bin/python -m training.promotion_gate --help
 .venv/bin/python scripts/fetch_telemetry.py --help
 ```
 
 ## 10) Critérios de aceite recomendados
 
 - Camada 1: `precision >= 0.92`, `recall >= 0.85`, `fpr <= 0.03`.
+- Camada 1 (slice gates): aplicar thresholds por `scenario_type`, `validation_tier`, `target_app` e `attack_family`.
 - Benchmark ONNX: validar P50/P95/P99 com lote 1 e 32.
 - Camada 3: usar holdout por tenant quando houver labels reais.
 - Nunca usar `dorsal_score` como label de treino.

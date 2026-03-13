@@ -39,11 +39,24 @@ TRAIN_NORMAL_COUNT=0
 REALWORLD_ATTACK_RATIO=0.02
 REALWORLD_NORMAL_COUNT=0
 REALWORLD_MAX_FPR=0.01
+HARD_NEGATIVES_PATH=./data/raw/hard_negatives
+HARD_NEGATIVE_RATIO=0.25
+SLICE_GATES_CONFIG=./configs/slice_gates.example.json
 ```
 
 Notas:
 - `*_NORMAL_COUNT=0` deixa o ratio controlar a proporcao com menos distorcao.
 - se o ambiente for muito sensivel a falso positivo, reduza `REALWORLD_MAX_FPR`.
+
+Metadados de campanha (opcionais, recomendados):
+
+```bash
+TARGET_APP=crapi
+LAB_RUN_ID=lab_20260313
+IS_REPLAY=0
+TRAIN_DATASET_MANIFEST=./reports/train_manifest.json
+REALWORLD_DATASET_MANIFEST=./reports/realworld_manifest.json
+```
 
 ## Exemplo pratico
 
@@ -60,6 +73,9 @@ make layer1-realworld
 - Dataset treino: `data/curated/attack_rw_<timestamp>.train.parquet`
 - Dataset real-world: `data/curated/attack_rw_<timestamp>.realworld.parquet`
 - Resumo: `reports/attack_rw_<timestamp>.realworld_summary.json`
+- Manifesto treino: `reports/attack_rw_<timestamp>.train.dataset_manifest.json`
+- Manifesto real-world: `reports/attack_rw_<timestamp>.realworld.dataset_manifest.json`
+- Promotion gate: `reports/attack_rw_<timestamp>.promotion_decision.json`
 
 Se o modelo passar nos dois gates de validacao, ele e promovido para:
 - `models/attack_latest.onnx`
@@ -75,10 +91,19 @@ Campos principais:
 - `validation_exit_codes`: status das duas validacoes.
 - `passed`: promocao final do modelo.
 
+## Checklist pre-promocao
+
+Antes de promover um modelo para `attack_latest`:
+
+1. Conferir manifesto de treino e validar `target_app`, `campaign_id` e `lab_run_id`.
+2. Conferir manifesto real-world e validar distribuicoes por `scenario_type` e `validation_tier`.
+3. Confirmar que o summary real-world manteve `fpr` dentro da meta operacional.
+4. Confirmar que o modelo passou nas duas validacoes (treino e real-world).
+5. Confirmar que `promotion_decision.json` aprovou os slice gates.
+
 ## Evolucao recomendada
 
 Quando voce passar a ter logs benignos reais:
 1. use esses logs como fonte principal de legitimidade;
 2. mantenha `Faker` como complemento, nao como base;
 3. rode o mesmo workflow para manter comparabilidade entre retreinos.
-

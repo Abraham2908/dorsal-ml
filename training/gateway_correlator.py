@@ -16,6 +16,34 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 
+from training.contracts import now_iso, source_family
+
+
+def _scenario_type_from_source_family(source_family_value: str) -> str:
+    if source_family_value.startswith("dast_"):
+        return "scanner_dast"
+    if source_family_value.startswith("agent_"):
+        return "agent_attack"
+    if source_family_value == "payload_repo":
+        return "public_payload"
+    if source_family_value == "synthetic":
+        return "legit_background"
+    return "unknown"
+
+
+def _validation_tier_from_match_tier(match_tier: str) -> str:
+    if match_tier == "confirmed_exact":
+        return "gold"
+    if match_tier == "confirmed_time_window":
+        return "silver"
+    return "bronze"
+
+
+def _effect_outcome_from_label(label: int) -> str:
+    if label == 1:
+        return "attempt_only"
+    return "unknown"
+
 
 def load_gateway_logs(filepath: str | Path) -> pd.DataFrame:
     filepath = Path(filepath)
@@ -107,13 +135,28 @@ def correlate_logs_with_findings(
     gateway_df: pd.DataFrame,
     findings_df: pd.DataFrame,
     time_window_seconds: float = 5.0,
+    campaign_id: str = "campaign_lab_default",
+    target_app: str = "unknown",
+    lab_run_id: str | None = None,
+    is_replay: bool = False,
 ) -> pd.DataFrame:
+    resolved_lab_run_id = lab_run_id or campaign_id
     out = gateway_df.copy()
     out["label"] = 0
     out["label_confidence"] = 0.0
     out["category"] = "normal"
     out["matched_finding"] = ""
     out["match_tier"] = "unmatched"
+    out["validation_tier"] = "bronze"
+    out["effect_outcome"] = "unknown"
+    out["scenario_type"] = "unknown"
+    out["target_app"] = target_app or "unknown"
+    out["attack_family"] = "unknown"
+    out["attack_technique"] = "unknown"
+    out["campaign_id"] = campaign_id
+    out["lab_run_id"] = resolved_lab_run_id
+    out["is_replay"] = bool(is_replay)
+    out["observed_at"] = out["timestamp"].astype(str) if "timestamp" in out.columns else now_iso()
 
     if findings_df.empty:
         logger.warning("No findings available, returning unmatched labels only.")
@@ -141,10 +184,16 @@ def correlate_logs_with_findings(
             continue
 
         out.at[idx, "match_tier"] = best_tier
-        out.at[idx, "category"] = str(best_finding.get("category", "unknown"))
+        category = str(best_finding.get("category", "unknown"))
+        out.at[idx, "category"] = category
         out.at[idx, "matched_finding"] = str(
             best_finding.get("title", best_finding.get("finding_id", ""))
         )
+        finding_source_family = source_family(str(best_finding.get("source", "unknown")))
+        out.at[idx, "scenario_type"] = _scenario_type_from_source_family(finding_source_family)
+        out.at[idx, "attack_family"] = category
+        out.at[idx, "attack_technique"] = category
+        out.at[idx, "validation_tier"] = _validation_tier_from_match_tier(best_tier)
 
         if best_tier == "confirmed_exact":
             out.at[idx, "label"] = 1
@@ -156,9 +205,13 @@ def correlate_logs_with_findings(
             out.at[idx, "label"] = 0
             out.at[idx, "label_confidence"] = 0.40
 
+        out.at[idx, "effect_outcome"] = _effect_outcome_from_label(int(out.at[idx, "label"]))
+
     logger.info("Correlation summary:")
     for tier, count in out["match_tier"].value_counts().items():
         logger.info(f"  {tier}: {count}")
+    for tier, count in out["validation_tier"].value_counts().items():
+        logger.info(f"  validation_tier={tier}: {count}")
     logger.info(f"  positives (label=1): {(out['label'] == 1).sum()}")
     return out
 
@@ -169,6 +222,11 @@ def build_labeled_dataset_from_lab(
     strix_run_dirs: list[str | Path] | None = None,
     output_path: str = "./data/intermediate/dataset_lab.parquet",
     time_window_seconds: float = 5.0,
+    campaign_id: str = "campaign_lab_default",
+    target_app: str = "unknown",
+    lab_run_id: str | None = None,
+    is_replay: bool = False,
+    manifest_path: str | None = None,
 ) -> pd.DataFrame:
     gateway_df = load_gateway_logs(gateway_log_path)
     if gateway_df.empty:
@@ -180,10 +238,48 @@ def build_labeled_dataset_from_lab(
         gateway_df=gateway_df,
         findings_df=findings_df,
         time_window_seconds=time_window_seconds,
+        campaign_id=campaign_id,
+        target_app=target_app,
+        lab_run_id=lab_run_id,
+        is_replay=is_replay,
     )
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     labeled.to_parquet(output, index=False)
+
+    if manifest_path:
+        manifest_out = Path(manifest_path)
+    else:
+        manifest_out = Path("reports") / f"dataset_lab_manifest_{campaign_id}.json"
+    manifest_out.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": "2.0",
+        "generated_at": now_iso(),
+        "campaign_id": campaign_id,
+        "target_app": target_app or "unknown",
+        "lab_run_id": lab_run_id or campaign_id,
+        "is_replay": bool(is_replay),
+        "inputs": {
+            "gateway_log_path": str(gateway_log_path),
+            "shannon_session_dirs": [str(p) for p in (shannon_session_dirs or [])],
+            "strix_run_dirs": [str(p) for p in (strix_run_dirs or [])],
+            "time_window_seconds": float(time_window_seconds),
+        },
+        "artifacts": {
+            "dataset_path": str(output),
+        },
+        "distributions": {
+            "labels": labeled["label"].value_counts().to_dict(),
+            "match_tiers": labeled["match_tier"].value_counts().to_dict(),
+            "validation_tiers": labeled["validation_tier"].value_counts().to_dict(),
+            "effect_outcomes": labeled["effect_outcome"].value_counts().to_dict(),
+            "scenario_types": labeled["scenario_type"].value_counts().to_dict(),
+        },
+    }
+    with open(manifest_out, "w", encoding="utf-8") as file:
+        json.dump(manifest, file, indent=2)
+
     logger.info(f"Labeled dataset written: {output}")
+    logger.info(f"Lab manifest written: {manifest_out}")
     return labeled

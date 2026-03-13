@@ -17,6 +17,12 @@ ZAP_FILE="${ZAP_FILE:-}"
 ACUNETIX_FILE="${ACUNETIX_FILE:-}"
 STRIX_RUNS_DIR="${STRIX_RUNS_DIR:-}"
 SHANNON_SESSIONS_DIR="${SHANNON_SESSIONS_DIR:-}"
+TARGET_APP="${TARGET_APP:-unknown}"
+LAB_RUN_ID="${LAB_RUN_ID:-}"
+IS_REPLAY="${IS_REPLAY:-0}"
+HARD_NEGATIVES_PATH="${HARD_NEGATIVES_PATH:-}"
+HARD_NEGATIVE_RATIO="${HARD_NEGATIVE_RATIO:-0.0}"
+SCENARIO_PROFILE="${SCENARIO_PROFILE:-default}"
 
 TRAIN_ATTACK_RATIO="${TRAIN_ATTACK_RATIO:-0.20}"
 TRAIN_NORMAL_COUNT="${TRAIN_NORMAL_COUNT:-0}"
@@ -37,6 +43,8 @@ MIN_RECALL="${MIN_RECALL:-0.85}"
 MAX_FPR="${MAX_FPR:-0.03}"
 MAX_LATENCY_P99_MS="${MAX_LATENCY_P99_MS:-2.0}"
 BENCHMARK_ITERATIONS="${BENCHMARK_ITERATIONS:-10000}"
+SLICE_MIN_SUPPORT="${SLICE_MIN_SUPPORT:-20}"
+SLICE_GATES_CONFIG="${SLICE_GATES_CONFIG:-}"
 
 REALWORLD_MIN_PRECISION="${REALWORLD_MIN_PRECISION:-0.85}"
 REALWORLD_MIN_RECALL="${REALWORLD_MIN_RECALL:-0.80}"
@@ -52,6 +60,15 @@ TRAIN_BENCHMARK_OUT="${TRAIN_BENCHMARK_OUT:-${REPORTS_DIR}/${MODEL_NAME}.train.b
 REALWORLD_DATASET_OUT="${REALWORLD_DATASET_OUT:-${DATA_DIR}/curated/${MODEL_NAME}.realworld.parquet}"
 REALWORLD_DATASET_REPORT="${REALWORLD_DATASET_REPORT:-${REPORTS_DIR}/${MODEL_NAME}.realworld.dataset_report.json}"
 REALWORLD_SUMMARY_OUT="${REALWORLD_SUMMARY_OUT:-${REPORTS_DIR}/${MODEL_NAME}.realworld_summary.json}"
+TRAIN_DATASET_MANIFEST="${TRAIN_DATASET_MANIFEST:-${REPORTS_DIR}/${MODEL_NAME}.train.dataset_manifest.json}"
+REALWORLD_DATASET_MANIFEST="${REALWORLD_DATASET_MANIFEST:-${REPORTS_DIR}/${MODEL_NAME}.realworld.dataset_manifest.json}"
+TRAIN_VALIDATION_REPORT="${TRAIN_VALIDATION_REPORT:-${REPORTS_DIR}/${MODEL_NAME}.train.validation.json}"
+REALWORLD_VALIDATION_REPORT="${REALWORLD_VALIDATION_REPORT:-${REPORTS_DIR}/${MODEL_NAME}.realworld.validation.json}"
+PROMOTION_REPORT="${PROMOTION_REPORT:-${REPORTS_DIR}/${MODEL_NAME}.promotion_decision.json}"
+TRAIN_LAB_RUN_ID="${TRAIN_LAB_RUN_ID:-${LAB_RUN_ID}}"
+REALWORLD_LAB_RUN_ID="${REALWORLD_LAB_RUN_ID:-${LAB_RUN_ID}}"
+TRAIN_IS_REPLAY="${TRAIN_IS_REPLAY:-${IS_REPLAY}}"
+REALWORLD_IS_REPLAY="${REALWORLD_IS_REPLAY:-${IS_REPLAY}}"
 
 mkdir -p "${DATA_DIR}/curated" "${MODELS_DIR}" "${REPORTS_DIR}" "${MODELS_DIR}/bundles"
 
@@ -101,59 +118,116 @@ if [ "${ATTACK_SOURCE_COUNT}" -eq 0 ]; then
 fi
 
 echo "[L1-REAL] Step 1/6 - Build training dataset (attack_ratio=${TRAIN_ATTACK_RATIO})..."
-"${PYTHON_BIN}" -m training.build_dataset \
-  --normal-count "${TRAIN_NORMAL_COUNT}" \
-  --attack-ratio "${TRAIN_ATTACK_RATIO}" \
-  --max-per-category "${TRAIN_MAX_PER_CATEGORY}" \
-  --campaign-id "${TRAIN_CAMPAIGN_ID}" \
-  --report-path "${TRAIN_DATASET_REPORT}" \
-  --output "${TRAIN_DATASET_OUT}" \
-  "${BUILD_SOURCE_ARGS[@]}"
+TRAIN_BUILD_ARGS=(
+  -m training.build_dataset
+  --normal-count "${TRAIN_NORMAL_COUNT}"
+  --attack-ratio "${TRAIN_ATTACK_RATIO}"
+  --hard-negative-ratio "${HARD_NEGATIVE_RATIO}"
+  --scenario-profile "${SCENARIO_PROFILE}"
+  --max-per-category "${TRAIN_MAX_PER_CATEGORY}"
+  --campaign-id "${TRAIN_CAMPAIGN_ID}"
+  --target-app "${TARGET_APP}"
+  --report-path "${TRAIN_DATASET_REPORT}"
+  --manifest-path "${TRAIN_DATASET_MANIFEST}"
+  --output "${TRAIN_DATASET_OUT}"
+)
+if [ -n "${TRAIN_LAB_RUN_ID}" ]; then
+  TRAIN_BUILD_ARGS+=(--lab-run-id "${TRAIN_LAB_RUN_ID}")
+fi
+if [ -n "${HARD_NEGATIVES_PATH}" ] && [ -e "${HARD_NEGATIVES_PATH}" ]; then
+  TRAIN_BUILD_ARGS+=(--hard-negatives-path "${HARD_NEGATIVES_PATH}")
+fi
+case "${TRAIN_IS_REPLAY,,}" in
+  1|true|yes|on)
+    TRAIN_BUILD_ARGS+=(--is-replay)
+    ;;
+esac
+"${PYTHON_BIN}" "${TRAIN_BUILD_ARGS[@]}" "${BUILD_SOURCE_ARGS[@]}"
 
 echo "[L1-REAL] Step 2/6 - Train model on training dataset..."
-"${PYTHON_BIN}" -m training.train_attack_model \
-  --dataset "${TRAIN_DATASET_OUT}" \
-  --output "${MODEL_OUT}" \
-  --n-estimators "${N_ESTIMATORS}" \
-  --max-depth "${MAX_DEPTH}" \
-  --test-size "${TEST_SIZE}" \
-  --min-precision "${MIN_PRECISION}" \
-  --min-recall "${MIN_RECALL}" \
+TRAIN_MODEL_ARGS=(
+  -m training.train_attack_model
+  --dataset "${TRAIN_DATASET_OUT}"
+  --output "${MODEL_OUT}"
+  --n-estimators "${N_ESTIMATORS}"
+  --max-depth "${MAX_DEPTH}"
+  --test-size "${TEST_SIZE}"
+  --min-precision "${MIN_PRECISION}"
+  --min-recall "${MIN_RECALL}"
   --max-fpr "${MAX_FPR}"
+  --slice-min-support "${SLICE_MIN_SUPPORT}"
+)
+if [ -n "${SLICE_GATES_CONFIG}" ]; then
+  TRAIN_MODEL_ARGS+=(--slice-gates-config "${SLICE_GATES_CONFIG}")
+fi
+"${PYTHON_BIN}" "${TRAIN_MODEL_ARGS[@]}"
 
 echo "[L1-REAL] Step 3/6 - Validate model on training dataset..."
 set +e
-"${PYTHON_BIN}" -m training.validate_model \
-  --model "${MODEL_OUT}" \
-  --dataset "${TRAIN_DATASET_OUT}" \
-  --min-precision "${MIN_PRECISION}" \
-  --min-recall "${MIN_RECALL}" \
-  --max-fpr "${MAX_FPR}" \
-  --max-latency-p99 "${MAX_LATENCY_P99_MS}" \
+TRAIN_VALIDATE_ARGS=(
+  -m training.validate_model
+  --model "${MODEL_OUT}"
+  --dataset "${TRAIN_DATASET_OUT}"
+  --min-precision "${MIN_PRECISION}"
+  --min-recall "${MIN_RECALL}"
+  --max-fpr "${MAX_FPR}"
+  --max-latency-p99 "${MAX_LATENCY_P99_MS}"
   --iterations "${BENCHMARK_ITERATIONS}"
+  --slice-min-support "${SLICE_MIN_SUPPORT}"
+  --report-json "${TRAIN_VALIDATION_REPORT}"
+)
+if [ -n "${SLICE_GATES_CONFIG}" ]; then
+  TRAIN_VALIDATE_ARGS+=(--slice-gates-config "${SLICE_GATES_CONFIG}")
+fi
+"${PYTHON_BIN}" "${TRAIN_VALIDATE_ARGS[@]}"
 TRAIN_VALIDATE_EXIT=$?
 set -e
 
 echo "[L1-REAL] Step 4/6 - Build real-world evaluation dataset (attack_ratio=${REALWORLD_ATTACK_RATIO})..."
-"${PYTHON_BIN}" -m training.build_dataset \
-  --normal-count "${REALWORLD_NORMAL_COUNT}" \
-  --attack-ratio "${REALWORLD_ATTACK_RATIO}" \
-  --max-per-category "${REALWORLD_MAX_PER_CATEGORY}" \
-  --campaign-id "${REALWORLD_CAMPAIGN_ID}" \
-  --report-path "${REALWORLD_DATASET_REPORT}" \
-  --output "${REALWORLD_DATASET_OUT}" \
-  "${BUILD_SOURCE_ARGS[@]}"
+REALWORLD_BUILD_ARGS=(
+  -m training.build_dataset
+  --normal-count "${REALWORLD_NORMAL_COUNT}"
+  --attack-ratio "${REALWORLD_ATTACK_RATIO}"
+  --hard-negative-ratio "${HARD_NEGATIVE_RATIO}"
+  --scenario-profile "${SCENARIO_PROFILE}"
+  --max-per-category "${REALWORLD_MAX_PER_CATEGORY}"
+  --campaign-id "${REALWORLD_CAMPAIGN_ID}"
+  --target-app "${TARGET_APP}"
+  --report-path "${REALWORLD_DATASET_REPORT}"
+  --manifest-path "${REALWORLD_DATASET_MANIFEST}"
+  --output "${REALWORLD_DATASET_OUT}"
+)
+if [ -n "${REALWORLD_LAB_RUN_ID}" ]; then
+  REALWORLD_BUILD_ARGS+=(--lab-run-id "${REALWORLD_LAB_RUN_ID}")
+fi
+if [ -n "${HARD_NEGATIVES_PATH}" ] && [ -e "${HARD_NEGATIVES_PATH}" ]; then
+  REALWORLD_BUILD_ARGS+=(--hard-negatives-path "${HARD_NEGATIVES_PATH}")
+fi
+case "${REALWORLD_IS_REPLAY,,}" in
+  1|true|yes|on)
+    REALWORLD_BUILD_ARGS+=(--is-replay)
+    ;;
+esac
+"${PYTHON_BIN}" "${REALWORLD_BUILD_ARGS[@]}" "${BUILD_SOURCE_ARGS[@]}"
 
 echo "[L1-REAL] Step 5/6 - Validate model on real-world evaluation dataset..."
 set +e
-"${PYTHON_BIN}" -m training.validate_model \
-  --model "${MODEL_OUT}" \
-  --dataset "${REALWORLD_DATASET_OUT}" \
-  --min-precision "${REALWORLD_MIN_PRECISION}" \
-  --min-recall "${REALWORLD_MIN_RECALL}" \
-  --max-fpr "${REALWORLD_MAX_FPR}" \
-  --max-latency-p99 "${REALWORLD_MAX_LATENCY_P99_MS}" \
+REALWORLD_VALIDATE_ARGS=(
+  -m training.validate_model
+  --model "${MODEL_OUT}"
+  --dataset "${REALWORLD_DATASET_OUT}"
+  --min-precision "${REALWORLD_MIN_PRECISION}"
+  --min-recall "${REALWORLD_MIN_RECALL}"
+  --max-fpr "${REALWORLD_MAX_FPR}"
+  --max-latency-p99 "${REALWORLD_MAX_LATENCY_P99_MS}"
   --iterations "${REALWORLD_ITERATIONS}"
+  --slice-min-support "${SLICE_MIN_SUPPORT}"
+  --report-json "${REALWORLD_VALIDATION_REPORT}"
+)
+if [ -n "${SLICE_GATES_CONFIG}" ]; then
+  REALWORLD_VALIDATE_ARGS+=(--slice-gates-config "${SLICE_GATES_CONFIG}")
+fi
+"${PYTHON_BIN}" "${REALWORLD_VALIDATE_ARGS[@]}"
 REALWORLD_VALIDATE_EXIT=$?
 set -e
 
@@ -164,7 +238,16 @@ echo "[L1-REAL] Step 6/6 - Benchmark and write summary..."
   --iterations "${BENCHMARK_ITERATIONS}" \
   --output-json "${TRAIN_BENCHMARK_OUT}"
 
-"${PYTHON_BIN}" - "${MODEL_OUT}" "${REALWORLD_DATASET_OUT}" "${TRAIN_DATASET_REPORT}" "${REALWORLD_DATASET_REPORT}" "${MODEL_OUT%.onnx}.eval.json" "${REALWORLD_SUMMARY_OUT}" "${TRAIN_VALIDATE_EXIT}" "${REALWORLD_VALIDATE_EXIT}" <<'PY'
+set +e
+"${PYTHON_BIN}" -m training.promotion_gate \
+  --train-eval "${MODEL_OUT%.onnx}.eval.json" \
+  --validation-eval "${TRAIN_VALIDATION_REPORT}" \
+  --validation-eval "${REALWORLD_VALIDATION_REPORT}" \
+  --output "${PROMOTION_REPORT}"
+PROMOTION_EXIT=$?
+set -e
+
+"${PYTHON_BIN}" - "${MODEL_OUT}" "${REALWORLD_DATASET_OUT}" "${TRAIN_DATASET_REPORT}" "${REALWORLD_DATASET_REPORT}" "${MODEL_OUT%.onnx}.eval.json" "${REALWORLD_SUMMARY_OUT}" "${TRAIN_VALIDATE_EXIT}" "${REALWORLD_VALIDATE_EXIT}" "${PROMOTION_EXIT}" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -232,6 +315,7 @@ train_eval_json_path = Path(sys.argv[5])
 summary_out_path = Path(sys.argv[6])
 train_validate_exit = int(sys.argv[7])
 realworld_validate_exit = int(sys.argv[8])
+promotion_exit = int(sys.argv[9])
 
 model_meta = _read_json(str(model_path.with_suffix(".json")))
 feature_names = model_meta.get("feature_names", [])
@@ -255,8 +339,9 @@ summary = {
     "validation_exit_codes": {
         "training_validation": train_validate_exit,
         "realworld_validation": realworld_validate_exit,
+        "promotion_gate": promotion_exit,
     },
-    "passed": bool(train_validate_exit == 0 and realworld_validate_exit == 0),
+    "passed": bool(train_validate_exit == 0 and realworld_validate_exit == 0 and promotion_exit == 0),
 }
 
 summary_out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -265,7 +350,7 @@ with open(summary_out_path, "w", encoding="utf-8") as f:
 PY
 
 PASSED=0
-if [ "${TRAIN_VALIDATE_EXIT}" -eq 0 ] && [ "${REALWORLD_VALIDATE_EXIT}" -eq 0 ]; then
+if [ "${TRAIN_VALIDATE_EXIT}" -eq 0 ] && [ "${REALWORLD_VALIDATE_EXIT}" -eq 0 ] && [ "${PROMOTION_EXIT}" -eq 0 ]; then
   PASSED=1
 fi
 
@@ -274,6 +359,9 @@ if [ "${PASSED}" -eq 1 ]; then
   cp "${MODEL_OUT}" "${LATEST_MODEL}"
   cp "${MODEL_OUT%.onnx}.json" "${MODELS_DIR}/attack_latest.json"
   cp "${MODEL_OUT%.onnx}.eval.json" "${MODELS_DIR}/attack_latest.eval.json"
+  cp "${TRAIN_VALIDATION_REPORT}" "${MODELS_DIR}/attack_latest.validation_train.json"
+  cp "${REALWORLD_VALIDATION_REPORT}" "${MODELS_DIR}/attack_latest.validation_realworld.json"
+  cp "${PROMOTION_REPORT}" "${MODELS_DIR}/attack_latest.promotion.json"
   cp "${MODEL_OUT%.onnx}.features.json" "${MODELS_DIR}/attack_latest.features.json"
   cp "${MODEL_OUT%.onnx}.manifest.json" "${MODELS_DIR}/attack_latest.manifest.json"
 
@@ -294,6 +382,7 @@ if [ "${PASSED}" -eq 1 ]; then
   echo "Layer-1 real-world workflow complete and approved."
   echo "Model:     ${MODEL_OUT}"
   echo "Summary:   ${REALWORLD_SUMMARY_OUT}"
+  echo "Promotion: ${PROMOTION_REPORT}"
 else
   echo ""
   echo "Layer-1 real-world workflow finished but failed quality gates."

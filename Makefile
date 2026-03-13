@@ -56,6 +56,7 @@ smoke:
 	.venv/bin/python -m training.validate_model --help
 	.venv/bin/python -m training.train_anomaly_model --help
 	.venv/bin/python -m training.benchmark_inference --help
+	.venv/bin/python -m training.promotion_gate --help
 	.venv/bin/python -m training.bundle_packager --help
 	.venv/bin/python scripts/fetch_telemetry.py --help
 

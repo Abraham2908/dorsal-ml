@@ -89,6 +89,14 @@ class RawAttackEvent:
     label_confidence: float
     campaign_id: str
     observed_at: str
+    scenario_type: str = "unknown"
+    target_app: str = "unknown"
+    attack_family: str = "unknown"
+    attack_technique: str = "unknown"
+    validation_tier: str = "bronze"
+    lab_run_id: str = "unknown"
+    effect_outcome: str = "unknown"
+    is_replay: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -105,6 +113,14 @@ class LabeledRequestSample:
     label_confidence: float
     category: str
     campaign_id: str
+    scenario_type: str = "unknown"
+    target_app: str = "unknown"
+    attack_family: str = "unknown"
+    attack_technique: str = "unknown"
+    validation_tier: str = "bronze"
+    lab_run_id: str = "unknown"
+    effect_outcome: str = "unknown"
+    is_replay: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)

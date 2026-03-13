@@ -13,6 +13,7 @@ import math
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -88,6 +89,131 @@ def _parse_csv_dirs(csv_value: str | None) -> list[str]:
     if not csv_value:
         return []
     return [part.strip() for part in csv_value.split(",") if part.strip()]
+
+
+def _normal_api_types_for_profile(profile: str) -> list[str] | None:
+    normalized = (profile or "default").strip().lower()
+    if normalized in {"default", "all"}:
+        return None
+    if normalized == "b2b":
+        return ["saas_b2b", "fintech"]
+    if normalized == "consumer":
+        return ["ecommerce", "healthtech"]
+    if normalized == "fintech":
+        return ["fintech"]
+    if normalized == "saas":
+        return ["saas_b2b"]
+    return None
+
+
+def _read_json_records(path: Path) -> list[dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as file:
+        payload = json.load(file)
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        records = payload.get("records")
+        if isinstance(records, list):
+            return [item for item in records if isinstance(item, dict)]
+        return [payload]
+    return []
+
+
+def _normalize_hard_negative_record(record: dict[str, Any], source_hint: str) -> dict[str, Any]:
+    payload = _safe_str(record.get("payload"))
+    method = _safe_str(record.get("method"), "GET").upper()
+    path = _safe_str(record.get("path"), "/")
+    body = _safe_str(record.get("body"))
+    return {
+        "payload": payload or body or path,
+        "method": method,
+        "path": path,
+        "body": body,
+        "source": _safe_str(record.get("source"), source_hint),
+        "source_file": _safe_str(record.get("source_file"), source_hint),
+        "category": _safe_str(record.get("category"), "hard_negative"),
+        "severity": _safe_str(record.get("severity"), "info"),
+        "evidence": _safe_str(record.get("evidence"), ""),
+        "validated": bool(record.get("validated", True)),
+        "label": 0,
+        "label_confidence": float(record.get("label_confidence", 0.99)),
+        "scenario_type": _safe_str(record.get("scenario_type"), "hard_negative"),
+        "attack_family": _safe_str(record.get("attack_family"), "benign_hard_negative"),
+        "attack_technique": _safe_str(record.get("attack_technique"), "benign_hard_negative"),
+        "validation_tier": _safe_str(record.get("validation_tier"), "gold"),
+        "effect_outcome": _safe_str(record.get("effect_outcome"), "benign_confirmed"),
+        "is_replay": bool(record.get("is_replay", False)),
+    }
+
+
+def _load_hard_negative_records(hard_negatives_path: str | None) -> list[dict[str, Any]]:
+    if not hard_negatives_path:
+        return []
+    root = Path(hard_negatives_path)
+    if not root.exists():
+        raise FileNotFoundError(f"Hard negatives path not found: {root}")
+
+    files: list[Path]
+    if root.is_dir():
+        files = sorted(
+            p
+            for p in root.rglob("*")
+            if p.suffix.lower() in {".json", ".jsonl", ".parquet"}
+        )
+    else:
+        files = [root]
+
+    records: list[dict[str, Any]] = []
+    for file_path in files:
+        source_hint = f"synthetic_hard_negative:{file_path.name}"
+        if file_path.suffix.lower() == ".parquet":
+            df = pd.read_parquet(file_path)
+            for raw in df.to_dict(orient="records"):
+                records.append(_normalize_hard_negative_record(raw, source_hint=source_hint))
+            continue
+
+        if file_path.suffix.lower() == ".jsonl":
+            with open(file_path, "r", encoding="utf-8") as file:
+                for line in file:
+                    text = line.strip()
+                    if not text:
+                        continue
+                    raw = json.loads(text)
+                    if isinstance(raw, dict):
+                        records.append(_normalize_hard_negative_record(raw, source_hint=source_hint))
+            continue
+
+        for raw in _read_json_records(file_path):
+            records.append(_normalize_hard_negative_record(raw, source_hint=source_hint))
+
+    logger.info(f"   Hard negatives: +{len(records)} from {root}")
+    return records
+
+
+def _scenario_type_from_source_family(source_family_value: str) -> str:
+    if source_family_value == "payload_repo":
+        return "public_payload"
+    if source_family_value.startswith("dast_"):
+        return "scanner_dast"
+    if source_family_value.startswith("agent_"):
+        return "agent_attack"
+    if source_family_value == "synthetic":
+        return "legit_background"
+    return "unknown"
+
+
+def _validation_tier_from_confidence(label_confidence: float) -> str:
+    if label_confidence >= 0.95:
+        return "gold"
+    if label_confidence >= 0.80:
+        return "silver"
+    return "bronze"
+
+
+def _effect_outcome_from_label(label: int) -> str:
+    if label == 1:
+        return "attempt_only"
+    return "unknown"
 
 
 def _collect_local_attack_records(
@@ -174,7 +300,13 @@ def _collect_local_attack_records(
     return records
 
 
-def _decorate_record(record: dict, campaign_id: str) -> dict:
+def _decorate_record(
+    record: dict,
+    campaign_id: str,
+    target_app: str,
+    lab_run_id: str,
+    is_replay: bool,
+) -> dict:
     payload = _safe_str(record.get("payload"))
     method = _safe_str(record.get("method"), "GET").upper()
     path = _safe_str(record.get("path"), "/")
@@ -192,6 +324,14 @@ def _decorate_record(record: dict, campaign_id: str) -> dict:
     src_family = source_family(src)
     event_id = make_event_id(src, src_file, payload_hash)
     split_key = make_split_key(src_family, campaign_id, payload_hash)
+    scenario_type = _safe_str(record.get("scenario_type"), _scenario_type_from_source_family(src_family))
+    attack_family = _safe_str(record.get("attack_family"), cat)
+    attack_technique = _safe_str(record.get("attack_technique"), cat)
+    validation_tier = _safe_str(record.get("validation_tier"), _validation_tier_from_confidence(lbl_conf))
+    effect_outcome = _safe_str(record.get("effect_outcome"), _effect_outcome_from_label(lbl))
+    resolved_target_app = _safe_str(record.get("target_app"), target_app or "unknown")
+    resolved_lab_run_id = _safe_str(record.get("lab_run_id"), lab_run_id or campaign_id)
+    resolved_is_replay = bool(record.get("is_replay", is_replay))
 
     enriched = dict(record)
     enriched.update(
@@ -216,6 +356,14 @@ def _decorate_record(record: dict, campaign_id: str) -> dict:
             "is_synthetic": is_synthetic_source(src),
             "split_key": split_key,
             "observed_at": _safe_str(record.get("observed_at"), now_iso()),
+            "scenario_type": scenario_type,
+            "target_app": resolved_target_app,
+            "attack_family": attack_family,
+            "attack_technique": attack_technique,
+            "validation_tier": validation_tier,
+            "lab_run_id": resolved_lab_run_id,
+            "effect_outcome": effect_outcome,
+            "is_replay": resolved_is_replay,
         }
     )
     return enriched
@@ -229,12 +377,19 @@ def build_dataset(
     acunetix_file: str | None = None,
     strix_runs_dir: str | None = None,
     shannon_sessions_dir: str | None = None,
+    hard_negatives_path: str | None = None,
+    hard_negative_ratio: float = 0.0,
+    scenario_profile: str = "default",
     normal_count: int = 100_000,
     attack_ratio: float = 0.2,
     output: str = "./data/curated/dataset_v1.parquet",
     max_per_category: int = 5000,
     campaign_id: str = "campaign_default",
+    target_app: str = "unknown",
+    lab_run_id: str | None = None,
+    is_replay: bool = False,
     report_path: str | None = None,
+    manifest_path: str | None = None,
     strix_days: int = 0,
     strix_api_key: str | None = None,
 ) -> pd.DataFrame:
@@ -271,13 +426,41 @@ def build_dataset(
     if attack_count == 0:
         raise ValueError("No attack records collected. Provide at least one local source.")
 
-    desired_normal = int(attack_count * (1.0 - attack_ratio) / max(attack_ratio, 1e-6))
-    normal_n = max(desired_normal, normal_count)
-    logger.info(f"Generating synthetic normal traffic: {normal_n:,}")
-    normals = generate_normal_requests(n=normal_n)
+    desired_benign = int(attack_count * (1.0 - attack_ratio) / max(attack_ratio, 1e-6))
+    min_benign = max(desired_benign, normal_count)
 
-    all_records = attacks + normals
-    all_records = [_decorate_record(record, campaign_id=campaign_id) for record in all_records]
+    hard_negatives_all = _load_hard_negative_records(hard_negatives_path)
+    hard_negative_n = 0
+    selected_hard_negatives: list[dict] = []
+    if hard_negatives_all:
+        if hard_negative_ratio > 0:
+            target_hard_negative = int(min_benign * hard_negative_ratio)
+        else:
+            target_hard_negative = min_benign
+        hard_negative_n = min(target_hard_negative, len(hard_negatives_all))
+        if hard_negative_n > 0:
+            selected_hard_negatives = hard_negatives_all[:hard_negative_n]
+
+    normal_n = max(min_benign - hard_negative_n, 0)
+    api_types = _normal_api_types_for_profile(scenario_profile)
+    logger.info(
+        f"Generating synthetic normal traffic: {normal_n:,} "
+        f"(hard negatives={hard_negative_n:,}, profile={scenario_profile})"
+    )
+    normals = generate_normal_requests(n=normal_n, api_types=api_types)
+
+    all_records = attacks + selected_hard_negatives + normals
+    resolved_lab_run_id = lab_run_id or campaign_id
+    all_records = [
+        _decorate_record(
+            record,
+            campaign_id=campaign_id,
+            target_app=target_app,
+            lab_run_id=resolved_lab_run_id,
+            is_replay=is_replay,
+        )
+        for record in all_records
+    ]
 
     logger.info("Extracting features...")
     features_list: list[np.ndarray] = []
@@ -329,6 +512,14 @@ def build_dataset(
         "validated",
         "label_confidence",
         "observed_at",
+        "scenario_type",
+        "target_app",
+        "attack_family",
+        "attack_technique",
+        "validation_tier",
+        "lab_run_id",
+        "effect_outcome",
+        "is_replay",
     ]
     for column in metadata_columns:
         df[column] = [record.get(column) for record in all_records]
@@ -360,16 +551,67 @@ def build_dataset(
         "feature_count": int(len(base_feature_names) + len(shannon_rows[0])),
         "attack_rows": int((df["label"] == 1).sum()),
         "normal_rows": int((df["label"] == 0).sum()),
+        "hard_negative_rows": int((df["scenario_type"] == "hard_negative").sum()),
+        "synthetic_normal_rows": int((df["source_family"] == "synthetic").sum()),
         "sources": df["source"].value_counts().to_dict(),
         "source_families": df["source_family"].value_counts().to_dict(),
         "categories_top": df["category"].value_counts().head(20).to_dict(),
+        "scenario_types": df["scenario_type"].value_counts().to_dict(),
+        "validation_tiers": df["validation_tier"].value_counts().to_dict(),
+        "effect_outcomes": df["effect_outcome"].value_counts().to_dict(),
         "elapsed_seconds": round(time.time() - start, 2),
     }
     with open(report_out, "w", encoding="utf-8") as file:
         json.dump(report, file, indent=2)
 
+    if manifest_path:
+        manifest_out = Path(manifest_path)
+    else:
+        manifest_out = Path("reports") / f"dataset_manifest_{campaign_id}.json"
+    manifest_out.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": "2.0",
+        "generated_at": now_iso(),
+        "campaign_id": campaign_id,
+        "target_app": target_app or "unknown",
+        "lab_run_id": resolved_lab_run_id,
+        "is_replay": bool(is_replay),
+        "parameters": {
+            "normal_count": int(normal_count),
+            "attack_ratio": float(attack_ratio),
+            "max_per_category": int(max_per_category),
+            "hard_negative_ratio": float(hard_negative_ratio),
+            "scenario_profile": scenario_profile,
+        },
+        "data_sources": {
+            "payloads_dir": payloads_dir,
+            "seclists_dir": seclists_dir,
+            "burp_file": burp_file,
+            "zap_file": zap_file,
+            "acunetix_file": acunetix_file,
+            "strix_runs_dir": strix_runs_dir,
+            "shannon_sessions_dir": shannon_sessions_dir,
+            "hard_negatives_path": hard_negatives_path,
+        },
+        "artifacts": {
+            "dataset_path": str(out_path),
+            "report_path": str(report_out),
+        },
+        "distributions": {
+            "labels": df["label"].value_counts().to_dict(),
+            "source_families": df["source_family"].value_counts().to_dict(),
+            "scenario_types": df["scenario_type"].value_counts().to_dict(),
+            "validation_tiers": df["validation_tier"].value_counts().to_dict(),
+            "effect_outcomes": df["effect_outcome"].value_counts().to_dict(),
+            "attack_families": df["attack_family"].value_counts().head(50).to_dict(),
+        },
+    }
+    with open(manifest_out, "w", encoding="utf-8") as file:
+        json.dump(manifest, file, indent=2)
+
     logger.info(f"Dataset written: {out_path}")
     logger.info(f"Build report written: {report_out}")
+    logger.info(f"Build manifest written: {manifest_out}")
     logger.info(f"Elapsed: {report['elapsed_seconds']}s")
     return df
 
@@ -383,12 +625,31 @@ def main() -> None:
     parser.add_argument("--acunetix-file", help="Acunetix export JSON")
     parser.add_argument("--strix-runs-dir", help="Path to Strix run dir or parent dir")
     parser.add_argument("--shannon-sessions-dir", help="Path to Shannon session dir or parent dir")
+    parser.add_argument(
+        "--hard-negatives-path",
+        help="Path to hard negatives corpus (file or directory with json/jsonl/parquet)",
+    )
+    parser.add_argument(
+        "--hard-negative-ratio",
+        type=float,
+        default=0.0,
+        help="Target benign share from hard negatives (0 uses as many as possible when provided)",
+    )
+    parser.add_argument(
+        "--scenario-profile",
+        default="default",
+        help="Synthetic normal profile: default|all|b2b|consumer|fintech|saas",
+    )
     parser.add_argument("--normal-count", type=int, default=100_000)
     parser.add_argument("--attack-ratio", type=float, default=0.2)
     parser.add_argument("--max-per-category", type=int, default=5000)
     parser.add_argument("--campaign-id", default="campaign_default")
+    parser.add_argument("--target-app", default="unknown")
+    parser.add_argument("--lab-run-id", help="Optional lab run identifier (defaults to campaign id)")
+    parser.add_argument("--is-replay", action="store_true", help="Mark samples as replay traffic")
     parser.add_argument("--output", default="./data/curated/dataset_v1.parquet")
     parser.add_argument("--report-path", help="Optional output path for JSON build report")
+    parser.add_argument("--manifest-path", help="Optional output path for JSON dataset manifest")
     parser.add_argument(
         "--strix-days",
         type=int,
@@ -421,12 +682,19 @@ def main() -> None:
         acunetix_file=args.acunetix_file,
         strix_runs_dir=strix_runs_dir,
         shannon_sessions_dir=shannon_sessions_dir,
+        hard_negatives_path=args.hard_negatives_path,
+        hard_negative_ratio=args.hard_negative_ratio,
+        scenario_profile=args.scenario_profile,
         normal_count=args.normal_count,
         attack_ratio=args.attack_ratio,
         output=args.output,
         max_per_category=args.max_per_category,
         campaign_id=args.campaign_id,
+        target_app=args.target_app,
+        lab_run_id=args.lab_run_id,
+        is_replay=args.is_replay,
         report_path=args.report_path,
+        manifest_path=args.manifest_path,
         strix_days=args.strix_days,
         strix_api_key=args.strix_api_key,
     )
