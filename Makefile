@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help venv install install-dev bootstrap setup-data layer1 layer3 all weekly smoke test
+.PHONY: help venv install install-dev bootstrap setup-data layer1 layer1-realworld layer3 all weekly smoke test
 
 help:
 	@echo "Targets:"
@@ -11,6 +11,7 @@ help:
 	@echo "  bootstrap    Create workspace folders"
 	@echo "  setup-data   Clone/update public payload repositories"
 	@echo "  layer1       Run Layer-1 (dataset -> train -> validate -> benchmark)"
+	@echo "  layer1-realworld Run Layer-1 with train + real-world validation workflow"
 	@echo "  layer3       Run Layer-3 (telemetry -> anomaly training)"
 	@echo "  all          Run Layer-1 + Layer-3"
 	@echo "  weekly       Run weekly retrain orchestration"
@@ -35,6 +36,9 @@ setup-data:
 
 layer1:
 	./scripts/run_layer1_pipeline.sh
+
+layer1-realworld:
+	./scripts/run_layer1_realworld_workflow.sh
 
 layer3:
 	./scripts/run_layer3_pipeline.sh

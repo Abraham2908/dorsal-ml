@@ -62,6 +62,33 @@ SHANNON_SESSIONS_DIR=./data/raw/shannon \
 make layer1
 ```
 
+### 3.3 Fluxo recomendado para cenario real (menos falso positivo)
+
+Use o workflow de duas fases:
+- treino com distribuicao 80/20 (ataque/legitimo controlado);
+- validacao final com distribuicao proxima da operacao (ex.: 98/2).
+
+```bash
+make layer1-realworld
+```
+
+Variaveis principais (opcionais):
+
+```bash
+TRAIN_ATTACK_RATIO=0.20 \
+REALWORLD_ATTACK_RATIO=0.02 \
+REALWORLD_MAX_FPR=0.01 \
+make layer1-realworld
+```
+
+Saidas adicionais:
+- `data/curated/attack_rw_*.train.parquet`
+- `data/curated/attack_rw_*.realworld.parquet`
+- `reports/attack_rw_*.realworld_summary.json`
+
+Playbook detalhado:
+- `docs/layer1_realworld_playbook.md`
+
 ## 4) Treino da Camada 3 (global anomaly)
 
 ### 4.1 Com telemetria local de arquivo

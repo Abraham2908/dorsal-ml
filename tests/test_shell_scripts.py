@@ -9,6 +9,7 @@ def test_shell_scripts_have_valid_syntax() -> None:
         "scripts/bootstrap_workspace.sh",
         "scripts/setup_data_sources.sh",
         "scripts/run_layer1_pipeline.sh",
+        "scripts/run_layer1_realworld_workflow.sh",
         "scripts/run_layer3_pipeline.sh",
         "scripts/run_all_pipelines.sh",
         "scripts/weekly_retrain.sh",
