@@ -9,7 +9,7 @@ help:
 	@echo "  install      Install runtime dependencies"
 	@echo "  install-dev  Install runtime + dev dependencies"
 	@echo "  bootstrap    Create workspace folders"
-	@echo "  setup-data   Clone/update public payload repositories"
+	@echo "  setup-data   Prepare static data sources (use STATIC_PROFILE=full for mandatory corpus)"
 	@echo "  layer1       Run Layer-1 (dataset -> train -> validate -> benchmark)"
 	@echo "  layer1-realworld Run Layer-1 with train + real-world validation workflow"
 	@echo "  layer3       Run Layer-3 (telemetry -> anomaly training)"

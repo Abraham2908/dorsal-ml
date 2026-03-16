@@ -36,6 +36,55 @@ class JsonlWriter:
             file.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
+def load_attack_targets() -> list[AttackTarget]:
+    """Load attack targets from ATTACK_TARGETS_JSON or legacy GW_* env vars."""
+    raw_json = os.getenv("ATTACK_TARGETS_JSON", "").strip()
+    if raw_json:
+        try:
+            payload = json.loads(raw_json)
+        except json.JSONDecodeError:
+            payload = []
+        targets: list[AttackTarget] = []
+        if isinstance(payload, list):
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                base_url = str(item.get("base_url", "")).strip().rstrip("/")
+                raw_paths = item.get("paths", ["/"])
+                if not name or not base_url:
+                    continue
+                paths: list[str] = []
+                if isinstance(raw_paths, list):
+                    for path in raw_paths:
+                        text = str(path).strip()
+                        if text:
+                            paths.append(text)
+                if not paths:
+                    paths = ["/"]
+                targets.append(AttackTarget(name=name, base_url=base_url, paths=paths))
+        if targets:
+            return targets
+
+    return [
+        AttackTarget(
+            "juice_shop",
+            os.getenv("GW_JUICE_URL", "http://gateway-juice:8080").rstrip("/"),
+            ["/rest/products/search"],
+        ),
+        AttackTarget(
+            "httpbin",
+            os.getenv("GW_HTTPBIN_URL", "http://gateway-httpbin:8080").rstrip("/"),
+            ["/anything"],
+        ),
+        AttackTarget(
+            "petstore",
+            os.getenv("GW_PETSTORE_URL", "http://gateway-petstore:8080").rstrip("/"),
+            ["/api/v3/pet"],
+        ),
+    ]
+
+
 def load_llm_payloads() -> list[str]:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
@@ -125,7 +174,7 @@ def send_attack_request(
 
     gateway_row = {
         "timestamp": now_iso(),
-        "source": "lab_ai_redteam",
+        "source": "lab_ai_simulated",
         "target_app": target.name,
         "method": method.upper(),
         "path": path,
@@ -260,14 +309,10 @@ def main() -> None:
 
     attack_iterations = max(1, int(os.getenv("ATTACK_ITERATIONS", "4")))
     request_log_path = os.getenv("REQUEST_LOG_PATH", "/lab-artifacts/gateway/attack_requests.jsonl")
-    strix_output_dir = Path(os.getenv("STRIX_OUTPUT_DIR", "/lab-artifacts/strix/run_ai_redteam"))
-    shannon_output_dir = Path(os.getenv("SHANNON_OUTPUT_DIR", "/lab-artifacts/shannon/session_ai_redteam"))
+    strix_output_dir = Path(os.getenv("STRIX_OUTPUT_DIR", "/lab-artifacts/strix/run_ai_simulated"))
+    shannon_output_dir = Path(os.getenv("SHANNON_OUTPUT_DIR", "/lab-artifacts/shannon/session_ai_simulated"))
 
-    targets = [
-        AttackTarget("juice_shop", os.getenv("GW_JUICE_URL", "http://gateway-juice:8080").rstrip("/"), ["/rest/products/search"]),
-        AttackTarget("httpbin", os.getenv("GW_HTTPBIN_URL", "http://gateway-httpbin:8080").rstrip("/"), ["/anything"]),
-        AttackTarget("petstore", os.getenv("GW_PETSTORE_URL", "http://gateway-petstore:8080").rstrip("/"), ["/api/v3/pet"]),
-    ]
+    targets = load_attack_targets()
 
     payloads = [
         "' OR 1=1--",
@@ -288,8 +333,8 @@ def main() -> None:
     session = requests.Session()
 
     print(
-        f"[ai_redteam] start iterations={attack_iterations} payloads={len(payloads)} "
-        f"output={request_log_path}"
+        f"[ai_simulated] start targets={len(targets)} iterations={attack_iterations} "
+        f"payloads={len(payloads)} output={request_log_path}"
     )
 
     for _ in range(attack_iterations):
@@ -318,7 +363,7 @@ def main() -> None:
         token=os.getenv("DORSAL_TEST_ORG_TOKEN", ""),
         output_path=Path("/lab-artifacts/reports/control_metrics_after_ai_attack.json"),
     )
-    print(f"[ai_redteam] done findings={len(findings)}")
+    print(f"[ai_simulated] done findings={len(findings)}")
 
 
 if __name__ == "__main__":

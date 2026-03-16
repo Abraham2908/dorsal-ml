@@ -88,6 +88,22 @@ def _load_feature_matrix(df: pd.DataFrame, feature_cols: list[str] | None) -> tu
     return X, numeric_cols
 
 
+def _to_json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _to_json_ready(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_ready(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return [_to_json_ready(v) for v in value.tolist()]
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    return value
+
+
 def validate_model(
     model_path: str,
     dataset_path: str,
@@ -150,9 +166,17 @@ def validate_model(
     fpr = fp / max(fp + tn, 1)
 
     global_results = {
-        "precision": {"value": float(precision), "target": float(min_precision), "passed": precision >= min_precision},
-        "recall": {"value": float(recall), "target": float(min_recall), "passed": recall >= min_recall},
-        "fpr": {"value": float(fpr), "target": float(max_fpr), "passed": fpr <= max_fpr},
+        "precision": {
+            "value": float(precision),
+            "target": float(min_precision),
+            "passed": bool(precision >= min_precision),
+        },
+        "recall": {
+            "value": float(recall),
+            "target": float(min_recall),
+            "passed": bool(recall >= min_recall),
+        },
+        "fpr": {"value": float(fpr), "target": float(max_fpr), "passed": bool(fpr <= max_fpr)},
         "confusion": {"tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn)},
     }
 
@@ -240,7 +264,7 @@ def validate_model(
             "p50_ms": p50,
             "p95_ms": p95,
             "p99_ms": p99,
-            "passed": latency_ok,
+            "passed": bool(latency_ok),
             "target_p99_ms": max_latency_p99_ms,
         },
         "by_slice": slice_report,
@@ -251,7 +275,7 @@ def validate_model(
     report_path = Path(report_json) if report_json else model.with_suffix(".validation.json")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as file:
-        json.dump(report, file, indent=2)
+        json.dump(_to_json_ready(report), file, indent=2)
     logger.info(f"Validation report written: {report_path}")
 
     if passed:

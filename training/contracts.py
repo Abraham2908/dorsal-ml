@@ -51,6 +51,16 @@ def source_family(source: str) -> str:
         return "agent_shannon"
     if "gateway" in s:
         return "gateway"
+    if "unsw" in s or "cic-ids" in s or "cic_ids" in s:
+        return "public_flow"
+    if "commoncrawl" in s or "common crawl" in s:
+        return "public_benign"
+    if "modsecurity" in s or "crs" in s:
+        return "waf_rules"
+    if "nvd" in s or "cve" in s:
+        return "vuln_feed"
+    if "juice shop" in s or "juiceshop" in s or "dvwa" in s:
+        return "lab_app"
     return "unknown"
 
 

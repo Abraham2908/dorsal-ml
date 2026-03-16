@@ -21,10 +21,17 @@ from loguru import logger
 
 from parsers.acunetix_parser import parse_acunetix_json
 from parsers.burp_parser import parse_burp_json, parse_burp_xml
+from parsers.cic_ids_parser import parse_cic_ids
+from parsers.common_crawl_parser import parse_common_crawl
+from parsers.dvwa_traffic_parser import parse_dvwa_traffic
+from parsers.juiceshop_traffic_parser import parse_juiceshop_traffic
+from parsers.modsec_crs_parser import parse_modsecurity_crs
+from parsers.nvd_cve_parser import parse_nvd_cve_snapshot
 from parsers.normal_traffic_generator import generate_normal_requests
 from parsers.payload_repos_parser import parse_payload_all_the_things, parse_seclists
 from parsers.shannon_parser import parse_shannon_all_sessions, parse_shannon_session
 from parsers.strix_parser import parse_strix_all_runs, parse_strix_run
+from parsers.unsw_nb15_parser import parse_unsw_nb15
 from parsers.zap_parser import parse_zap_json
 from training.contracts import (
     canonical_payload_hash,
@@ -199,6 +206,16 @@ def _scenario_type_from_source_family(source_family_value: str) -> str:
         return "agent_attack"
     if source_family_value == "synthetic":
         return "legit_background"
+    if source_family_value == "public_flow":
+        return "public_flow_dataset"
+    if source_family_value == "public_benign":
+        return "public_benign_dataset"
+    if source_family_value == "waf_rules":
+        return "waf_rule_seed"
+    if source_family_value == "vuln_feed":
+        return "vuln_intel_seed"
+    if source_family_value == "lab_app":
+        return "app_attack_dataset"
     return "unknown"
 
 
@@ -216,6 +233,21 @@ def _effect_outcome_from_label(label: int) -> str:
     return "unknown"
 
 
+def _validate_required_static_sources(
+    *,
+    require_static_full: bool,
+    source_paths: dict[str, str | None],
+) -> None:
+    if not require_static_full:
+        return
+    missing = [name for name, path in source_paths.items() if not path or not Path(path).exists()]
+    if missing:
+        raise ValueError(
+            "Full static profile requested but required sources are missing: "
+            + ", ".join(sorted(missing))
+        )
+
+
 def _collect_local_attack_records(
     payloads_dir: str | None,
     seclists_dir: str | None,
@@ -224,6 +256,13 @@ def _collect_local_attack_records(
     acunetix_file: str | None,
     strix_runs_dir: str | None,
     shannon_sessions_dir: str | None,
+    unsw_nb15_dir: str | None,
+    cic_ids_dir: str | None,
+    juiceshop_traffic_dir: str | None,
+    dvwa_traffic_dir: str | None,
+    modsec_crs_dir: str | None,
+    nvd_snapshot_file: str | None,
+    commoncrawl_dir: str | None,
     max_per_category: int,
 ) -> list[dict]:
     records: list[dict] = []
@@ -296,6 +335,68 @@ def _collect_local_attack_records(
             logger.info(f"   Shannon snapshots: +{len(parsed)}")
         except Exception as exc:
             logger.warning(f"   Shannon snapshots skipped: {exc}")
+
+    if unsw_nb15_dir:
+        try:
+            parsed = parse_unsw_nb15(unsw_nb15_dir, max_rows=max(max_per_category * 100, 300_000))
+            records.extend(parsed)
+            logger.info(f"   UNSW-NB15: +{len(parsed)}")
+        except Exception as exc:
+            logger.warning(f"   UNSW-NB15 skipped: {exc}")
+
+    if cic_ids_dir:
+        try:
+            parsed = parse_cic_ids(cic_ids_dir, max_rows=max(max_per_category * 100, 300_000))
+            records.extend(parsed)
+            logger.info(f"   CIC-IDS: +{len(parsed)}")
+        except Exception as exc:
+            logger.warning(f"   CIC-IDS skipped: {exc}")
+
+    if juiceshop_traffic_dir:
+        try:
+            parsed = parse_juiceshop_traffic(
+                juiceshop_traffic_dir,
+                max_rows=max(max_per_category * 50, 250_000),
+            )
+            records.extend(parsed)
+            logger.info(f"   OWASP Juice Shop traffic: +{len(parsed)}")
+        except Exception as exc:
+            logger.warning(f"   OWASP Juice Shop traffic skipped: {exc}")
+
+    if dvwa_traffic_dir:
+        try:
+            parsed = parse_dvwa_traffic(dvwa_traffic_dir, max_rows=max(max_per_category * 50, 250_000))
+            records.extend(parsed)
+            logger.info(f"   DVWA traffic: +{len(parsed)}")
+        except Exception as exc:
+            logger.warning(f"   DVWA traffic skipped: {exc}")
+
+    if modsec_crs_dir:
+        try:
+            parsed = parse_modsecurity_crs(modsec_crs_dir, max_rules=max(max_per_category, 3_000))
+            records.extend(parsed)
+            logger.info(f"   ModSecurity CRS: +{len(parsed)}")
+        except Exception as exc:
+            logger.warning(f"   ModSecurity CRS skipped: {exc}")
+
+    if nvd_snapshot_file:
+        try:
+            parsed = parse_nvd_cve_snapshot(
+                nvd_snapshot_file,
+                max_records=max(max_per_category * 20, 80_000),
+            )
+            records.extend(parsed)
+            logger.info(f"   NVD/CVE snapshot: +{len(parsed)}")
+        except Exception as exc:
+            logger.warning(f"   NVD/CVE snapshot skipped: {exc}")
+
+    if commoncrawl_dir:
+        try:
+            parsed = parse_common_crawl(commoncrawl_dir, max_rows=max(max_per_category * 100, 500_000))
+            records.extend(parsed)
+            logger.info(f"   Common Crawl: +{len(parsed)}")
+        except Exception as exc:
+            logger.warning(f"   Common Crawl skipped: {exc}")
 
     return records
 
@@ -377,6 +478,13 @@ def build_dataset(
     acunetix_file: str | None = None,
     strix_runs_dir: str | None = None,
     shannon_sessions_dir: str | None = None,
+    unsw_nb15_dir: str | None = None,
+    cic_ids_dir: str | None = None,
+    juiceshop_traffic_dir: str | None = None,
+    dvwa_traffic_dir: str | None = None,
+    modsec_crs_dir: str | None = None,
+    nvd_snapshot_file: str | None = None,
+    commoncrawl_dir: str | None = None,
     hard_negatives_path: str | None = None,
     hard_negative_ratio: float = 0.0,
     scenario_profile: str = "default",
@@ -392,6 +500,7 @@ def build_dataset(
     manifest_path: str | None = None,
     strix_days: int = 0,
     strix_api_key: str | None = None,
+    require_static_full: bool = False,
 ) -> pd.DataFrame:
     """
     Build supervised dataset (Layer 1) from local sources only.
@@ -409,8 +518,23 @@ def build_dataset(
             "Use --strix-runs-dir with local runs."
         )
 
+    _validate_required_static_sources(
+        require_static_full=require_static_full,
+        source_paths={
+            "payloads_dir": payloads_dir,
+            "seclists_dir": seclists_dir,
+            "unsw_nb15_dir": unsw_nb15_dir,
+            "cic_ids_dir": cic_ids_dir,
+            "juiceshop_traffic_dir": juiceshop_traffic_dir,
+            "dvwa_traffic_dir": dvwa_traffic_dir,
+            "modsec_crs_dir": modsec_crs_dir,
+            "nvd_snapshot_file": nvd_snapshot_file,
+            "commoncrawl_dir": commoncrawl_dir,
+        },
+    )
+
     logger.info("Collecting attack snapshots...")
-    attacks = _collect_local_attack_records(
+    collected_records = _collect_local_attack_records(
         payloads_dir=payloads_dir,
         seclists_dir=seclists_dir,
         burp_file=burp_file,
@@ -418,10 +542,19 @@ def build_dataset(
         acunetix_file=acunetix_file,
         strix_runs_dir=strix_runs_dir,
         shannon_sessions_dir=shannon_sessions_dir,
+        unsw_nb15_dir=unsw_nb15_dir,
+        cic_ids_dir=cic_ids_dir,
+        juiceshop_traffic_dir=juiceshop_traffic_dir,
+        dvwa_traffic_dir=dvwa_traffic_dir,
+        modsec_crs_dir=modsec_crs_dir,
+        nvd_snapshot_file=nvd_snapshot_file,
+        commoncrawl_dir=commoncrawl_dir,
         max_per_category=max_per_category,
     )
-    attack_count = len(attacks)
-    logger.info(f"Total attack events: {attack_count:,}")
+    attack_records = [row for row in collected_records if int(row.get("label", 1)) == 1]
+    source_benign_records = [row for row in collected_records if int(row.get("label", 1)) == 0]
+    attack_count = len(attack_records)
+    logger.info(f"Collected records: total={len(collected_records):,} attack={attack_count:,} benign={len(source_benign_records):,}")
 
     if attack_count == 0:
         raise ValueError("No attack records collected. Provide at least one local source.")
@@ -441,15 +574,18 @@ def build_dataset(
         if hard_negative_n > 0:
             selected_hard_negatives = hard_negatives_all[:hard_negative_n]
 
-    normal_n = max(min_benign - hard_negative_n, 0)
+    benign_remaining = max(min_benign - hard_negative_n, 0)
+    source_benign_n = min(benign_remaining, len(source_benign_records))
+    selected_source_benign = source_benign_records[:source_benign_n]
+    normal_n = max(benign_remaining - source_benign_n, 0)
     api_types = _normal_api_types_for_profile(scenario_profile)
     logger.info(
         f"Generating synthetic normal traffic: {normal_n:,} "
-        f"(hard negatives={hard_negative_n:,}, profile={scenario_profile})"
+        f"(hard negatives={hard_negative_n:,}, source benign={source_benign_n:,}, profile={scenario_profile})"
     )
     normals = generate_normal_requests(n=normal_n, api_types=api_types)
 
-    all_records = attacks + selected_hard_negatives + normals
+    all_records = attack_records + selected_hard_negatives + selected_source_benign + normals
     resolved_lab_run_id = lab_run_id or campaign_id
     all_records = [
         _decorate_record(
@@ -552,6 +688,7 @@ def build_dataset(
         "attack_rows": int((df["label"] == 1).sum()),
         "normal_rows": int((df["label"] == 0).sum()),
         "hard_negative_rows": int((df["scenario_type"] == "hard_negative").sum()),
+        "source_benign_rows": int(((df["label"] == 0) & (df["source_family"] != "synthetic")).sum()),
         "synthetic_normal_rows": int((df["source_family"] == "synthetic").sum()),
         "sources": df["source"].value_counts().to_dict(),
         "source_families": df["source_family"].value_counts().to_dict(),
@@ -591,7 +728,15 @@ def build_dataset(
             "acunetix_file": acunetix_file,
             "strix_runs_dir": strix_runs_dir,
             "shannon_sessions_dir": shannon_sessions_dir,
+            "unsw_nb15_dir": unsw_nb15_dir,
+            "cic_ids_dir": cic_ids_dir,
+            "juiceshop_traffic_dir": juiceshop_traffic_dir,
+            "dvwa_traffic_dir": dvwa_traffic_dir,
+            "modsec_crs_dir": modsec_crs_dir,
+            "nvd_snapshot_file": nvd_snapshot_file,
+            "commoncrawl_dir": commoncrawl_dir,
             "hard_negatives_path": hard_negatives_path,
+            "require_static_full": bool(require_static_full),
         },
         "artifacts": {
             "dataset_path": str(out_path),
@@ -625,6 +770,13 @@ def main() -> None:
     parser.add_argument("--acunetix-file", help="Acunetix export JSON")
     parser.add_argument("--strix-runs-dir", help="Path to Strix run dir or parent dir")
     parser.add_argument("--shannon-sessions-dir", help="Path to Shannon session dir or parent dir")
+    parser.add_argument("--unsw-nb15-dir", help="Path to UNSW-NB15 local snapshot directory")
+    parser.add_argument("--cic-ids-dir", help="Path to CIC-IDS 2017/2018 local snapshot directory")
+    parser.add_argument("--juiceshop-traffic-dir", help="Path to OWASP Juice Shop traffic snapshots")
+    parser.add_argument("--dvwa-traffic-dir", help="Path to DVWA traffic snapshots")
+    parser.add_argument("--modsec-crs-dir", help="Path to ModSecurity CRS repository or exported rules")
+    parser.add_argument("--nvd-snapshot-file", help="Path to NVD/CVE local snapshot JSON")
+    parser.add_argument("--commoncrawl-dir", help="Path to Common Crawl sampled request files")
     parser.add_argument(
         "--hard-negatives-path",
         help="Path to hard negatives corpus (file or directory with json/jsonl/parquet)",
@@ -650,6 +802,11 @@ def main() -> None:
     parser.add_argument("--output", default="./data/curated/dataset_v1.parquet")
     parser.add_argument("--report-path", help="Optional output path for JSON build report")
     parser.add_argument("--manifest-path", help="Optional output path for JSON dataset manifest")
+    parser.add_argument(
+        "--require-static-full",
+        action="store_true",
+        help="Fail when any required static source for the full profile is missing.",
+    )
     parser.add_argument(
         "--strix-days",
         type=int,
@@ -682,6 +839,13 @@ def main() -> None:
         acunetix_file=args.acunetix_file,
         strix_runs_dir=strix_runs_dir,
         shannon_sessions_dir=shannon_sessions_dir,
+        unsw_nb15_dir=args.unsw_nb15_dir,
+        cic_ids_dir=args.cic_ids_dir,
+        juiceshop_traffic_dir=args.juiceshop_traffic_dir,
+        dvwa_traffic_dir=args.dvwa_traffic_dir,
+        modsec_crs_dir=args.modsec_crs_dir,
+        nvd_snapshot_file=args.nvd_snapshot_file,
+        commoncrawl_dir=args.commoncrawl_dir,
         hard_negatives_path=args.hard_negatives_path,
         hard_negative_ratio=args.hard_negative_ratio,
         scenario_profile=args.scenario_profile,
@@ -697,6 +861,7 @@ def main() -> None:
         manifest_path=args.manifest_path,
         strix_days=args.strix_days,
         strix_api_key=args.strix_api_key,
+        require_static_full=args.require_static_full,
     )
 
 

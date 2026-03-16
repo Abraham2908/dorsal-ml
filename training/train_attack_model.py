@@ -81,6 +81,59 @@ def get_feature_cols(df: pd.DataFrame) -> list[str]:
     return [c for c in FEATURE_COLS_BASE + FEATURE_COLS_SHANNON if c in df.columns]
 
 
+def _normalize_onnx_attr_value(value: object) -> object:
+    if isinstance(value, (bool, np.bool_)):
+        return int(value)
+    if isinstance(value, np.ndarray) and value.dtype == np.bool_:
+        return value.astype(np.int64)
+    if isinstance(value, (list, tuple)):
+        return [_normalize_onnx_attr_value(v) for v in value]
+    return value
+
+
+def _is_bool_attr_onnx_error(exc: BaseException) -> bool:
+    cursor: BaseException | None = exc
+    seen: set[int] = set()
+    while cursor is not None and id(cursor) not in seen:
+        seen.add(id(cursor))
+        text = str(cursor)
+        if "Expected an int, got a boolean" in text:
+            return True
+        cursor = cursor.__cause__ or cursor.__context__
+    return False
+
+
+def _export_onnx(model: RandomForestClassifier, n_features: int):
+    initial_types = [("input", FloatTensorType([None, n_features]))]
+    try:
+        return convert_sklearn(model, initial_types=initial_types)
+    except Exception as exc:
+        # Compatibility workaround for skl2onnx/onnx stacks that emit bool attrs
+        # in TreeEnsembleClassifier integer fields.
+        if not _is_bool_attr_onnx_error(exc):
+            raise
+        import onnx.helper as onnx_helper
+
+        logger.warning(
+            "ONNX export hit bool/int attribute incompatibility; retrying with normalized attrs."
+        )
+        original_make_attribute = onnx_helper.make_attribute
+
+        def _patched_make_attribute(key, value, *args, **kwargs):
+            return original_make_attribute(
+                key,
+                _normalize_onnx_attr_value(value),
+                *args,
+                **kwargs,
+            )
+
+        onnx_helper.make_attribute = _patched_make_attribute
+        try:
+            return convert_sklearn(model, initial_types=initial_types)
+        finally:
+            onnx_helper.make_attribute = original_make_attribute
+
+
 def _safe_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_score: np.ndarray) -> dict:
     precision = precision_score(y_true, y_pred, zero_division=0)
     recall = recall_score(y_true, y_pred, zero_division=0)
@@ -243,10 +296,7 @@ def train_attack_model(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     if passed and ONNX_AVAILABLE:
-        onx = convert_sklearn(
-            model,
-            initial_types=[("input", FloatTensorType([None, X.shape[1]]))],
-        )
+        onx = _export_onnx(model, X.shape[1])
         with open(output, "wb") as file:
             file.write(onx.SerializeToString())
         logger.info(f"ONNX exported: {output}")

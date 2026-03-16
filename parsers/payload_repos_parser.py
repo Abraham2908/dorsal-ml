@@ -10,7 +10,7 @@ FORMATO DE ENTRADA:
   - SecLists: arquivos .txt com um payload/word por linha
 
 COMO BAIXAR:
-  git clone https://github.com/swisskyrepo/PayloadAllTheThings.git
+  git clone https://github.com/swisskyrepo/PayloadsAllTheThings.git
   git clone --depth 1 --filter=blob:none --sparse https://github.com/danielmiessler/SecLists.git
   cd SecLists && git sparse-checkout set Fuzzing Discovery/Web-Content
 

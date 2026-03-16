@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "column": "scenario_type",
+      "value": "scanner_dast",
+      "min_support": 5,
+      "min_recall": 0.8
+    },
+    {
+      "column": "validation_tier",
+      "value": "gold",
+      "min_support": 10,
+      "min_precision": 0.9,
+      "min_recall": 0.9
+    },
+    {
+      "column": "target_app",
+      "min_support": 25,
+      "max_fpr": 0.05
+    }
+  ]
+}

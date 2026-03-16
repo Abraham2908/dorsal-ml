@@ -7,53 +7,63 @@ Montar um lab repetivel para Camada 1 com:
 - APIs vulneraveis e APIs conhecidas para trafego legitimo.
 - Gateway Dorsal na frente de todas as APIs.
 - Geracao de trafego legitimo com estado.
-- Campanhas de ataque com scanner classico e agente de ataque orientado por LLM (opcional).
+- Campanhas de ataque com scanner classico e agente simulado orientado por LLM (opcional).
 - Artefatos prontos para alimentar `build_dataset`, `build_lab_dataset` e `layer1-realworld`.
 
 Arquivos entregues para este plano:
 
 - Compose do lab: [labs/docker-compose.layer1-lab.yml](/home/abraham/tools/dorsal-ml/labs/docker-compose.layer1-lab.yml)
 - Simulador de trafego legitimo: [labs/traffic/legit_traffic.py](/home/abraham/tools/dorsal-ml/labs/traffic/legit_traffic.py)
-- Runner de ataque + output de agentes: [labs/traffic/ai_redteam_agent.py](/home/abraham/tools/dorsal-ml/labs/traffic/ai_redteam_agent.py)
+- Runner de ataque simulado + output compativel com parsers: [labs/traffic/ai_redteam_agent.py](/home/abraham/tools/dorsal-ml/labs/traffic/ai_redteam_agent.py)
 - Build da imagem de trafego/ataque: [labs/traffic/Dockerfile](/home/abraham/tools/dorsal-ml/labs/traffic/Dockerfile)
 - Exemplo de variaveis: [labs/.env.lab.example](/home/abraham/tools/dorsal-ml/labs/.env.lab.example)
 
 ## Arquitetura do Lab
 
-- `vuln-juice-shop`: app vulneravel conhecida.
-- `safe-httpbin` e `safe-petstore`: apps conhecidas para trafego funcional/benigno.
-- `gateway-juice`, `gateway-httpbin`, `gateway-petstore`: um gateway por upstream.
+- `vuln-juice-shop`, `vuln-vampi`, `vuln-dvga`: apps vulneraveis.
+- `safe-httpbin`, `safe-petstore`, `safe-hasura`: apps conhecidas para trafego funcional/benigno.
+- gateways dedicados por upstream: `gateway-juice`, `gateway-vampi`, `gateway-dvga`, `gateway-httpbin`, `gateway-petstore`, `gateway-hasura`.
 - `traffic-legit-sim`: simula usuarios com sessao/cookies e fluxo multi-etapa.
-- `attack-zap-baseline`: scanner classico (ZAP) gerando JSON/HTML.
-- `attack-ai-redteam`: replay de payloads + expansao por LLM (quando chave configurada), gerando:
+- `attack-zap-baseline`: scanner classico (ZAP) para APIs HTTP/REST.
+- `attack-zap-graphql`: scanner classico (ZAP) para alvos GraphQL.
+- `attack-ai-simulated`: replay de payloads + expansao por LLM (quando chave configurada), gerando:
   - `gateway/attack_requests.jsonl`
-  - estrutura estilo `strix` em `data/raw/lab/strix/...`
-  - estrutura estilo `shannon` em `data/raw/lab/shannon/...`
+  - estrutura estilo `strix` em `data/raw/lab/strix/...` (simulada)
+  - estrutura estilo `shannon` em `data/raw/lab/shannon/...` (simulada)
+
+Importante:
+- `attack-ai-simulated` **nao e** o Shannon/Strix oficial.
+- Shannon/Strix oficiais devem ser executados manualmente (manual-first), apontando para os gateways do lab.
 
 ## Pre-requisitos
 
 1. Control plane e dashboard do Dorsal ativos.
-2. Criar 3 gateways no control plane e copiar as API keys:
+2. Criar gateways no control plane e copiar as API keys:
    - `gw_lab_juice`
+   - `gw_lab_vampi`
+   - `gw_lab_dvga`
    - `gw_lab_httpbin`
    - `gw_lab_petstore`
+   - `gw_lab_hasura`
 3. Preparar env do lab:
 
 ```bash
 cd /home/abraham/tools/dorsal-ml
 cp labs/.env.lab.example labs/.env.lab
-# editar labs/.env.lab com as 3 API keys e, opcionalmente, DORSAL_TEST_ORG_TOKEN
+# editar labs/.env.lab com as API keys dos gateways e, opcionalmente, DORSAL_TEST_ORG_TOKEN
+# se o repo dorsal estiver em outro caminho, ajustar DORSAL_GATEWAY_BUILD_CONTEXT
 ```
 
 ## Ordem de execucao do Lab
 
-### 1) Subir base (APIs + gateways)
+Esta secao cobre somente a coleta operacional do lab.
+Para treino recomendado, rode primeiro a Fase A estatica e depois execute os passos abaixo.
+
+### 1) Subir base (apps + gateways)
 
 ```bash
 cd /home/abraham/tools/dorsal-ml
-docker compose --env-file labs/.env.lab -f labs/docker-compose.layer1-lab.yml up -d \
-  vuln-juice-shop safe-httpbin safe-petstore \
-  gateway-juice gateway-httpbin gateway-petstore
+docker compose --env-file labs/.env.lab -f labs/docker-compose.layer1-lab.yml --profile baseline up -d
 ```
 
 ### 2) Rodar trafego legitimo com estado
@@ -63,12 +73,25 @@ docker compose --env-file labs/.env.lab -f labs/docker-compose.layer1-lab.yml --
   --build traffic-legit-sim
 ```
 
-### 3) Rodar ataques (scanner classico + agente)
+### 3) Rodar ataques simulados (scanner classico + agente simulado)
 
 ```bash
-docker compose --env-file labs/.env.lab -f labs/docker-compose.layer1-lab.yml --profile attacks up \
-  --build attack-zap-baseline attack-ai-redteam
+docker compose --env-file labs/.env.lab -f labs/docker-compose.layer1-lab.yml --profile baseline --profile attacks up \
+  --build attack-zap-baseline attack-zap-graphql attack-ai-simulated
 ```
+
+### 3.1) Rodar Shannon/Strix oficiais (manual-first)
+
+Exemplo de direcao operacional:
+
+1. Execute o Strix oficial contra um ou mais gateways do lab.
+2. Salve o run em `./data/raw/lab/strix/<run_id>`.
+3. Execute o Shannon oficial contra os gateways.
+4. Salve a sessao em `./data/raw/lab/shannon/<session_id>`.
+
+Observacao:
+- No modo manual-first, voce decide instrucoes, escopo e janela de execucao.
+- O pipeline do Dorsal apenas ingere e correlaciona os artefatos gerados.
 
 ### 4) Consolidar logs do gateway para correlacao
 
@@ -89,12 +112,13 @@ cd /home/abraham/tools/dorsal-ml
 make venv
 make install-dev
 make bootstrap
-make setup-data
+STATIC_PROFILE=full make setup-data
 ```
 
 2. Treinar baseline com fontes publicas:
 
 ```bash
+STATIC_PROFILE=full \
 TARGET_APP=lab_multi \
 LAB_RUN_ID=static_bootstrap \
 ATTACK_RATIO=0.20 \
@@ -108,8 +132,8 @@ make layer1
 ```bash
 .venv/bin/python -m training.build_lab_dataset \
   --gateway-log ./data/raw/lab/gateway/gateway.jsonl \
-  --strix-dirs ./data/raw/lab/strix/run_ai_redteam \
-  --shannon-dirs ./data/raw/lab/shannon/session_ai_redteam \
+  --strix-dirs ./data/raw/lab/strix/run_ai_simulated \
+  --shannon-dirs ./data/raw/lab/shannon/session_ai_simulated \
   --campaign-id campaign_lab_real_001 \
   --target-app multi_lab \
   --lab-run-id run_lab_001 \
@@ -131,6 +155,7 @@ SLICE_GATES_CONFIG=./configs/slice_gates.example.json \
 TRAIN_ATTACK_RATIO=0.20 \
 REALWORLD_ATTACK_RATIO=0.02 \
 REALWORLD_MAX_FPR=0.01 \
+STATIC_PROFILE=full \
 make layer1-realworld
 ```
 
@@ -141,18 +166,18 @@ make layer1-realworld
 - `reports/*.promotion_decision.json`
 - `reports/*realworld_summary.json`
 
-## Top 10 fontes para fase estatica (antes do lab)
+## Fontes estaticas obrigatorias (STATIC_PROFILE=full)
 
-1. OWASP API Security Top 10
-2. OWASP Web Security Testing Guide (WSTG)
-3. PayloadAllTheThings
-4. SecLists
-5. PortSwigger Web Security Academy Labs
-6. OWASP Juice Shop docs + challenge catalog
-7. OWASP crAPI docs/labs
-8. ZAP baseline/full scan reports
-9. NVD (CVE feed) focado em stacks de API
-10. CISA KEV catalog para priorizar tecnicas em exploracao ativa
+1. UNSW-NB15 (`data/academic/UNSW-NB15`)
+2. CIC-IDS 2017/2018 (`data/academic/CIC-IDS`)
+3. OWASP Juice Shop traffic snapshots (`data/raw/static/juiceshop`)
+4. DVWA traffic snapshots (`data/raw/static/dvwa`)
+5. ModSecurity CRS (`data/coreruleset`)
+6. NVD/CVE snapshot local (`data/nvd/nvd_api_snapshot.json`)
+7. Common Crawl samples (`data/commoncrawl`)
+8. PayloadAllTheThings (`data/PayloadAllTheThings`)
+9. SecLists (`data/SecLists`)
+10. DAST snapshots locais (ZAP/Burp/Acunetix)
 
 ## Como acompanhar no Control Plane
 
@@ -170,7 +195,8 @@ make layer1-realworld
 2. Automatizar trafego legitimo com estado:
    - **Sim**, com `traffic-legit-sim` (sessao/cookie/fluxos multi-etapa).
 3. Rodar campanhas de ataque com scanners classicos + agentes de IA:
-   - **Sim**, com `attack-zap-baseline` + `attack-ai-redteam` (LLM opcional).
+   - **Sim**, com `attack-zap-baseline`, `attack-zap-graphql` e `attack-ai-simulated`.
+   - Para agentes oficiais, usar execucao manual de Shannon/Strix e ingestao pelos parsers.
 4. Formalizar manifestos, tiers de validacao e outcomes:
    - **Sim**, o pipeline ja grava manifests e tiers (`build_dataset`, `build_lab_dataset`, `validate_model`, `promotion_gate`).
 5. Transformar Camada 1 em treinamento por cenarios reais (nao so payload repo):

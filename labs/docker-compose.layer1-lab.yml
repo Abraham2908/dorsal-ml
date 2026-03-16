@@ -1,119 +1,264 @@
 name: dorsal-layer1-lab
 
+x-gateway-common: &gateway-common
+  build:
+    context: ${DORSAL_GATEWAY_BUILD_CONTEXT:-../../dorsal/gateway}
+  command: ["sh", "-lc", "cd /tmp && python -m dorsal"]
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  environment: &gateway-env
+    DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
+    DORSAL_TENANT_HASH: ${DORSAL_TENANT_HASH:-tenant_lab}
+    DORSAL_MODE: proxy
+    DORSAL_FAIL_OPEN: "true"
+    DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
+    DORSAL_ML_ENABLED: "true"
+    DORSAL_PII_ENABLED: "true"
+    DORSAL_LAYER2_ENABLED: "true"
+    DORSAL_SYNC_INTERVAL_SECONDS: ${DORSAL_SYNC_INTERVAL_SECONDS:-30}
+    DORSAL_ML_ROLLOUT_MODE: ${DORSAL_ML_ROLLOUT_MODE:-shadow}
+    DORSAL_ML_ROLLOUT_PERCENT: ${DORSAL_ML_ROLLOUT_PERCENT:-20}
+    DORSAL_ML_ALERT_THRESHOLD: ${DORSAL_ML_ALERT_THRESHOLD:-0.55}
+    DORSAL_ML_BLOCK_THRESHOLD: ${DORSAL_ML_BLOCK_THRESHOLD:-0.85}
+    DORSAL_ML_ANOMALY_WEIGHT: ${DORSAL_ML_ANOMALY_WEIGHT:-0.30}
+    DORSAL_MODEL_BUNDLE_PATH: ${DORSAL_MODEL_BUNDLE_PATH:-/data/models/bundle}
+    DORSAL_MODEL_SIGNING_PUBLIC_KEY_B64: ${DORSAL_MODEL_SIGNING_PUBLIC_KEY_B64:-}
+    DORSAL_MODEL_KEK: ${DORSAL_MODEL_KEK:-}
+    DORSAL_MODEL_STRICT_VERIFY: ${DORSAL_MODEL_STRICT_VERIFY:-true}
+  networks: [lab_net]
+
 services:
   vuln-juice-shop:
     image: bkimminich/juice-shop:latest
     restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
     networks: [lab_net]
+    profiles: ["baseline", "traffic", "attacks", "demo", "full"]
+
+  vuln-vampi:
+    image: erev0s/vampi:latest
+    restart: unless-stopped
+    environment:
+      vulnerable: ${VAMPI_VULNERABLE:-1}
+      tokentimetolive: ${VAMPI_TOKEN_TTL:-60}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/').status < 500 else 1)",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [lab_net]
+    profiles: ["baseline", "traffic", "attacks", "demo", "full"]
+
+  vuln-dvga:
+    image: dolevf/dvga:latest
+    restart: unless-stopped
+    environment:
+      WEB_HOST: 0.0.0.0
+    networks: [lab_net]
+    profiles: ["baseline", "graphql", "attacks", "demo", "full"]
 
   safe-httpbin:
     image: mccutchen/go-httpbin:v2.15.0
     restart: unless-stopped
-    command: ["-port", "8080"]
+    command: ["/bin/go-httpbin", "-port", "8080"]
     networks: [lab_net]
+    profiles: ["baseline", "traffic", "full"]
 
   safe-petstore:
     image: swaggerapi/petstore3:latest
     restart: unless-stopped
     networks: [lab_net]
+    profiles: ["baseline", "traffic", "full"]
+
+  safe-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hasura
+      POSTGRES_USER: hasura
+      POSTGRES_PASSWORD: hasura
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hasura -d hasura"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes:
+      - ../data/postgres/hasura:/var/lib/postgresql/data
+    networks: [lab_net]
+    profiles: ["baseline", "graphql", "traffic", "full"]
+
+  safe-hasura:
+    image: hasura/graphql-engine:v2.48.6
+    restart: unless-stopped
+    depends_on:
+      safe-postgres:
+        condition: service_healthy
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgres://hasura:hasura@safe-postgres:5432/hasura
+      HASURA_GRAPHQL_ENABLE_CONSOLE: "true"
+      HASURA_GRAPHQL_DEV_MODE: "true"
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET:-lab_hasura_admin}
+      HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup,http-log,webhook-log,websocket-log,query-log
+      HASURA_GRAPHQL_CORS_DOMAIN: "*"
+      HASURA_GRAPHQL_UNAUTHORIZED_ROLE: public
+    ports:
+      - "18090:8080"
+    networks: [lab_net]
+    profiles: ["baseline", "graphql", "traffic", "full"]
 
   gateway-juice:
-    build:
-      context: ../dorsal/gateway
-    restart: unless-stopped
-    depends_on: [vuln-juice-shop]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    <<: *gateway-common
+    depends_on:
+      vuln-juice-shop:
+        condition: service_started
     environment:
+      <<: *gateway-env
       DORSAL_UPSTREAM: http://vuln-juice-shop:3000
-      DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
       DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_JUICE:?set_gateway_api_key}
       DORSAL_GATEWAY_ID: gw_lab_juice
-      DORSAL_TENANT_HASH: tenant_lab
-      DORSAL_MODE: proxy
-      DORSAL_FAIL_OPEN: "true"
-      DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
-      DORSAL_ML_ENABLED: "true"
-      DORSAL_PII_ENABLED: "true"
-      DORSAL_LAYER2_ENABLED: "true"
-      DORSAL_SYNC_INTERVAL_SECONDS: "30"
-      DORSAL_ML_ROLLOUT_MODE: ${DORSAL_ML_ROLLOUT_MODE:-shadow}
-      DORSAL_ML_ROLLOUT_PERCENT: ${DORSAL_ML_ROLLOUT_PERCENT:-20}
-      DORSAL_ML_ALERT_THRESHOLD: ${DORSAL_ML_ALERT_THRESHOLD:-0.55}
-      DORSAL_ML_BLOCK_THRESHOLD: ${DORSAL_ML_BLOCK_THRESHOLD:-0.85}
-      DORSAL_ML_ANOMALY_WEIGHT: ${DORSAL_ML_ANOMALY_WEIGHT:-0.30}
     ports:
       - "18081:8080"
-    networks: [lab_net]
+    volumes:
+      - ../data/gateway/juice:/data
+      - ../models/bundles/attack_latest:/data/models/bundle:ro
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["baseline", "traffic", "attacks", "demo", "full"]
+
+  gateway-vampi:
+    <<: *gateway-common
+    depends_on:
+      vuln-vampi:
+        condition: service_healthy
+    environment:
+      <<: *gateway-env
+      DORSAL_UPSTREAM: http://vuln-vampi:5000
+      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_VAMPI:?set_gateway_api_key}
+      DORSAL_GATEWAY_ID: gw_lab_vampi
+    ports:
+      - "18084:8080"
+    volumes:
+      - ../data/gateway/vampi:/data
+      - ../models/bundles/attack_latest:/data/models/bundle:ro
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["baseline", "traffic", "attacks", "demo", "full"]
+
+  gateway-dvga:
+    <<: *gateway-common
+    depends_on:
+      - vuln-dvga
+    environment:
+      <<: *gateway-env
+      DORSAL_UPSTREAM: http://vuln-dvga:5013
+      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_DVGA:?set_gateway_api_key}
+      DORSAL_GATEWAY_ID: gw_lab_dvga
+    ports:
+      - "18085:8080"
+    volumes:
+      - ../data/gateway/dvga:/data
+      - ../models/bundles/attack_latest:/data/models/bundle:ro
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["baseline", "graphql", "attacks", "demo", "full"]
 
   gateway-httpbin:
-    build:
-      context: ../dorsal/gateway
-    restart: unless-stopped
-    depends_on: [safe-httpbin]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    <<: *gateway-common
+    depends_on:
+      - safe-httpbin
     environment:
+      <<: *gateway-env
       DORSAL_UPSTREAM: http://safe-httpbin:8080
-      DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
       DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_HTTPBIN:?set_gateway_api_key}
       DORSAL_GATEWAY_ID: gw_lab_httpbin
-      DORSAL_TENANT_HASH: tenant_lab
-      DORSAL_MODE: proxy
-      DORSAL_FAIL_OPEN: "true"
-      DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
-      DORSAL_ML_ENABLED: "true"
-      DORSAL_PII_ENABLED: "true"
-      DORSAL_LAYER2_ENABLED: "true"
-      DORSAL_SYNC_INTERVAL_SECONDS: "30"
-      DORSAL_ML_ROLLOUT_MODE: ${DORSAL_ML_ROLLOUT_MODE:-shadow}
-      DORSAL_ML_ROLLOUT_PERCENT: ${DORSAL_ML_ROLLOUT_PERCENT:-20}
-      DORSAL_ML_ALERT_THRESHOLD: ${DORSAL_ML_ALERT_THRESHOLD:-0.55}
-      DORSAL_ML_BLOCK_THRESHOLD: ${DORSAL_ML_BLOCK_THRESHOLD:-0.85}
-      DORSAL_ML_ANOMALY_WEIGHT: ${DORSAL_ML_ANOMALY_WEIGHT:-0.30}
     ports:
       - "18082:8080"
-    networks: [lab_net]
+    volumes:
+      - ../data/gateway/httpbin:/data
+      - ../models/bundles/attack_latest:/data/models/bundle:ro
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["baseline", "traffic", "attacks", "full"]
 
   gateway-petstore:
-    build:
-      context: ../dorsal/gateway
-    restart: unless-stopped
-    depends_on: [safe-petstore]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    <<: *gateway-common
+    depends_on:
+      - safe-petstore
     environment:
+      <<: *gateway-env
       DORSAL_UPSTREAM: http://safe-petstore:8080
-      DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
       DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_PETSTORE:?set_gateway_api_key}
       DORSAL_GATEWAY_ID: gw_lab_petstore
-      DORSAL_TENANT_HASH: tenant_lab
-      DORSAL_MODE: proxy
-      DORSAL_FAIL_OPEN: "true"
-      DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
-      DORSAL_ML_ENABLED: "true"
-      DORSAL_PII_ENABLED: "true"
-      DORSAL_LAYER2_ENABLED: "true"
-      DORSAL_SYNC_INTERVAL_SECONDS: "30"
-      DORSAL_ML_ROLLOUT_MODE: ${DORSAL_ML_ROLLOUT_MODE:-shadow}
-      DORSAL_ML_ROLLOUT_PERCENT: ${DORSAL_ML_ROLLOUT_PERCENT:-20}
-      DORSAL_ML_ALERT_THRESHOLD: ${DORSAL_ML_ALERT_THRESHOLD:-0.55}
-      DORSAL_ML_BLOCK_THRESHOLD: ${DORSAL_ML_BLOCK_THRESHOLD:-0.85}
-      DORSAL_ML_ANOMALY_WEIGHT: ${DORSAL_ML_ANOMALY_WEIGHT:-0.30}
     ports:
       - "18083:8080"
-    networks: [lab_net]
+    volumes:
+      - ../data/gateway/petstore:/data
+      - ../models/bundles/attack_latest:/data/models/bundle:ro
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["baseline", "traffic", "attacks", "full"]
+
+  gateway-hasura:
+    <<: *gateway-common
+    depends_on:
+      safe-hasura:
+        condition: service_started
+    environment:
+      <<: *gateway-env
+      DORSAL_UPSTREAM: http://safe-hasura:8080
+      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_HASURA:?set_gateway_api_key}
+      DORSAL_GATEWAY_ID: gw_lab_hasura
+    ports:
+      - "18086:8080"
+    volumes:
+      - ../data/gateway/hasura:/data
+      - ../models/bundles/attack_latest:/data/models/bundle:ro
+      - ../data/raw/lab:/lab-artifacts
+    profiles: ["baseline", "graphql", "traffic", "attacks", "full"]
 
   traffic-legit-sim:
     build:
       context: ./traffic
     command: ["python", "/app/legit_traffic.py"]
     restart: "no"
-    depends_on: [gateway-juice, gateway-httpbin, gateway-petstore]
+    depends_on:
+      gateway-juice:
+        condition: service_started
+      gateway-vampi:
+        condition: service_started
+      gateway-httpbin:
+        condition: service_started
+      gateway-petstore:
+        condition: service_started
+      gateway-hasura:
+        condition: service_started
     environment:
+      LEGIT_TARGETS_JSON: >-
+        [{"name":"juice_shop","base_url":"http://gateway-juice:8080","flow":"juice"},
+         {"name":"vampi","base_url":"http://gateway-vampi:8080","flow":"vampi"},
+         {"name":"httpbin","base_url":"http://gateway-httpbin:8080","flow":"httpbin"},
+         {"name":"petstore","base_url":"http://gateway-petstore:8080","flow":"petstore"},
+         {"name":"hasura","base_url":"http://gateway-hasura:8080","flow":"hasura"}]
       GW_JUICE_URL: http://gateway-juice:8080
+      GW_VAMPI_URL: http://gateway-vampi:8080
       GW_HTTPBIN_URL: http://gateway-httpbin:8080
       GW_PETSTORE_URL: http://gateway-petstore:8080
+      GW_HASURA_URL: http://gateway-hasura:8080
       USER_SIM_DURATION_MINUTES: ${USER_SIM_DURATION_MINUTES:-45}
       USER_SIM_RPS: ${USER_SIM_RPS:-3}
       USER_SIM_CONCURRENCY: ${USER_SIM_CONCURRENCY:-12}
@@ -126,34 +271,77 @@ services:
 
   attack-zap-baseline:
     image: ghcr.io/zaproxy/zaproxy:stable
-    entrypoint: ["/bin/sh", "-lc"]
-    command: >
-      mkdir -p /zap/wrk &&
-      zap-baseline.py -t http://gateway-juice:8080 -J /zap/wrk/zap_juice.json -r /zap/wrk/zap_juice.html -I || true &&
-      zap-baseline.py -t http://gateway-httpbin:8080 -J /zap/wrk/zap_httpbin.json -r /zap/wrk/zap_httpbin.html -I || true &&
-      zap-baseline.py -t http://gateway-petstore:8080 -J /zap/wrk/zap_petstore.json -r /zap/wrk/zap_petstore.html -I || true
-    depends_on: [gateway-juice, gateway-httpbin, gateway-petstore]
+    entrypoint:
+      [
+        "/bin/sh",
+        "-lc",
+        "mkdir -p /zap/wrk; /zap/zap-baseline.py -t http://gateway-juice:8080 -J zap_juice.json -r zap_juice.html -I || true; /zap/zap-baseline.py -t http://gateway-vampi:8080 -J zap_vampi.json -r zap_vampi.html -I || true; /zap/zap-baseline.py -t http://gateway-httpbin:8080 -J zap_httpbin.json -r zap_httpbin.html -I || true; /zap/zap-baseline.py -t http://gateway-petstore:8080 -J zap_petstore.json -r zap_petstore.html -I || true; /zap/zap-baseline.py -t http://gateway-hasura:8080 -J zap_hasura.json -r zap_hasura.html -I || true",
+      ]
+    depends_on:
+      - gateway-juice
+      - gateway-vampi
+      - gateway-httpbin
+      - gateway-petstore
+      - gateway-hasura
     volumes:
       - ../data/dast/zap:/zap/wrk
     profiles: ["attacks", "full"]
     networks: [lab_net]
 
-  attack-ai-redteam:
+  attack-zap-graphql:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    entrypoint:
+      [
+        "/bin/sh",
+        "-lc",
+        "mkdir -p /zap/wrk; /zap/zap-baseline.py -t http://gateway-dvga:8080 -J zap_dvga.json -r zap_dvga.html -I || true; /zap/zap-baseline.py -t http://gateway-hasura:8080 -J zap_hasura_graphql.json -r zap_hasura_graphql.html -I || true",
+      ]
+    depends_on:
+      - gateway-dvga
+      - gateway-hasura
+    volumes:
+      - ../data/dast/zap:/zap/wrk
+    profiles: ["graphql", "attacks", "full"]
+    networks: [lab_net]
+
+  attack-ai-simulated:
     build:
       context: ./traffic
     command: ["python", "/app/ai_redteam_agent.py"]
     restart: "no"
-    depends_on: [gateway-juice, gateway-httpbin, gateway-petstore]
+    depends_on:
+      gateway-juice:
+        condition: service_started
+      gateway-vampi:
+        condition: service_started
+      gateway-dvga:
+        condition: service_started
+      gateway-httpbin:
+        condition: service_started
+      gateway-petstore:
+        condition: service_started
+      gateway-hasura:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      ATTACK_TARGETS_JSON: >-
+        [{"name":"juice_shop","base_url":"http://gateway-juice:8080","paths":["/rest/products/search","/api/Challenges/"]},
+         {"name":"vampi","base_url":"http://gateway-vampi:8080","paths":["/users/v1","/books/v1"]},
+         {"name":"dvga","base_url":"http://gateway-dvga:8080","paths":["/graphql","/"]},
+         {"name":"httpbin","base_url":"http://gateway-httpbin:8080","paths":["/anything","/post"]},
+         {"name":"petstore","base_url":"http://gateway-petstore:8080","paths":["/api/v3/pet","/api/v3/pet/findByStatus"]},
+         {"name":"hasura","base_url":"http://gateway-hasura:8080","paths":["/v1/graphql","/healthz"]}]
       GW_JUICE_URL: http://gateway-juice:8080
+      GW_VAMPI_URL: http://gateway-vampi:8080
+      GW_DVGA_URL: http://gateway-dvga:8080
       GW_HTTPBIN_URL: http://gateway-httpbin:8080
       GW_PETSTORE_URL: http://gateway-petstore:8080
+      GW_HASURA_URL: http://gateway-hasura:8080
       ATTACK_ITERATIONS: ${ATTACK_ITERATIONS:-4}
       REQUEST_LOG_PATH: /lab-artifacts/gateway/attack_requests.jsonl
-      STRIX_OUTPUT_DIR: /lab-artifacts/strix/run_ai_redteam
-      SHANNON_OUTPUT_DIR: /lab-artifacts/shannon/session_ai_redteam
+      STRIX_OUTPUT_DIR: /lab-artifacts/strix/run_ai_simulated
+      SHANNON_OUTPUT_DIR: /lab-artifacts/shannon/session_ai_simulated
       DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
       DORSAL_TEST_ORG_TOKEN: ${DORSAL_TEST_ORG_TOKEN:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
@@ -161,7 +349,7 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
     volumes:
       - ../data/raw/lab:/lab-artifacts
-    profiles: ["attacks", "ai", "full"]
+    profiles: ["attacks", "ai-simulated", "graphql", "full"]
     networks: [lab_net]
 
 networks:

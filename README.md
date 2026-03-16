@@ -21,16 +21,29 @@ cd /home/abraham/tools/dorsal-ml
 make venv
 make install-dev
 make bootstrap
-make setup-data
+STATIC_PROFILE=full make setup-data
 make smoke
 make test
 ```
 
-Isso cria `.venv`, estrutura de diretórios (`data/`, `models/`, `reports/`, `keys/`, `logs/`) e baixa PayloadAllTheThings/SecLists.
+Isso cria `.venv`, estrutura de diretórios (`data/`, `models/`, `reports/`, `keys/`, `logs/`) e prepara fontes estaticas.
+`STATIC_PROFILE=full` inclui a base obrigatoria (UNSW-NB15, CIC-IDS, Juice/DVWA traffic dirs, ModSecurity CRS, NVD snapshot e Common Crawl local).
 
 ## 3) Treino da Camada 1 (ataques conhecidos)
 
-### 3.1 Fluxo rápido (somente fontes públicas)
+### 3.0 Ordem recomendada (estatico -> lab -> realworld)
+
+1. Rode bootstrap estatico completo (`STATIC_PROFILE=full make setup-data` + `make layer1`).
+2. Depois suba o lab e gere trafego legitimo + ataques (`LAB_PLAN.md`).
+3. Por fim rode `make layer1-realworld` para validacao com distribuicao operacional.
+
+`attack-zap-baseline`, `attack-zap-graphql` e `attack-ai-simulated` nao exigem dataset pre-gerado; exigem apenas lab ativo e `labs/.env.lab` configurado.
+
+Observacao importante:
+- `attack-ai-simulated` gera artefatos compativeis com Shannon/Strix, mas nao executa os agentes oficiais.
+- Shannon/Strix oficiais seguem modo manual-first (voce roda os agentes e salva outputs em `data/raw/lab/strix` e `data/raw/lab/shannon`).
+
+### 3.1 Fluxo rápido (profile classic)
 
 ```bash
 make layer1
@@ -42,9 +55,28 @@ Saídas principais:
 - `models/attack_latest.onnx`
 - `reports/attack_*.benchmark.json`
 
+### 3.1.1 Fluxo estático completo (fontes obrigatórias)
+
+```bash
+STATIC_PROFILE=full \
+TARGET_APP=lab_multi \
+LAB_RUN_ID=static_bootstrap \
+ATTACK_RATIO=0.20 \
+make layer1
+```
+
+Esse fluxo usa as novas fontes estaticas quando os caminhos locais existem:
+- `data/academic/UNSW-NB15`
+- `data/academic/CIC-IDS`
+- `data/raw/static/juiceshop`
+- `data/raw/static/dvwa`
+- `data/coreruleset`
+- `data/nvd/nvd_api_snapshot.json`
+- `data/commoncrawl`
+
 ### 3.2 Fluxo com DAST e agentes (opcional)
 
-Coloque exports/snapshots locais:
+Coloque exports/snapshots locais (incluindo runs oficiais de Shannon/Strix, quando usados):
 - `data/dast/burp_export.xml`
 - `data/dast/zap_report.json`
 - `data/dast/acunetix_export.json`
@@ -133,6 +165,14 @@ Exemplo de uso direto:
 .venv/bin/python -m training.build_dataset \
   --payloads-dir ./data/PayloadAllTheThings \
   --seclists-dir ./data/SecLists \
+  --unsw-nb15-dir ./data/academic/UNSW-NB15 \
+  --cic-ids-dir ./data/academic/CIC-IDS \
+  --juiceshop-traffic-dir ./data/raw/static/juiceshop \
+  --dvwa-traffic-dir ./data/raw/static/dvwa \
+  --modsec-crs-dir ./data/coreruleset \
+  --nvd-snapshot-file ./data/nvd/nvd_api_snapshot.json \
+  --commoncrawl-dir ./data/commoncrawl \
+  --require-static-full \
   --campaign-id campaign_crapi_v1 \
   --target-app crapi \
   --lab-run-id lab_20260313 \

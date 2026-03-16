@@ -23,6 +23,7 @@ def now_iso() -> str:
 class Target:
     name: str
     base_url: str
+    flow: str
 
 
 class JsonlWriter:
@@ -33,6 +34,51 @@ class JsonlWriter:
     def write(self, row: dict) -> None:
         with open(self.path, "a", encoding="utf-8") as file:
             file.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def load_legit_targets() -> dict[str, Target]:
+    """
+    Load legitimate traffic targets from LEGIT_TARGETS_JSON.
+
+    Fallback to legacy GW_* env vars when JSON is absent or invalid.
+    """
+    raw_json = os.getenv("LEGIT_TARGETS_JSON", "").strip()
+    if raw_json:
+        try:
+            payload = json.loads(raw_json)
+        except json.JSONDecodeError:
+            payload = []
+        targets: dict[str, Target] = {}
+        if isinstance(payload, list):
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                base_url = str(item.get("base_url", "")).strip().rstrip("/")
+                flow = str(item.get("flow", name)).strip().lower() or name
+                if not name or not base_url:
+                    continue
+                targets[name] = Target(name=name, base_url=base_url, flow=flow)
+        if targets:
+            return targets
+
+    return {
+        "juice_shop": Target(
+            "juice_shop",
+            os.getenv("GW_JUICE_URL", "http://gateway-juice:8080").rstrip("/"),
+            "juice",
+        ),
+        "httpbin": Target(
+            "httpbin",
+            os.getenv("GW_HTTPBIN_URL", "http://gateway-httpbin:8080").rstrip("/"),
+            "httpbin",
+        ),
+        "petstore": Target(
+            "petstore",
+            os.getenv("GW_PETSTORE_URL", "http://gateway-petstore:8080").rstrip("/"),
+            "petstore",
+        ),
+    }
 
 
 def _safe_text(payload: object) -> str:
@@ -202,6 +248,120 @@ def run_petstore_flow(
         request_writer=request_writer,
         hard_negative_writer=hard_negative_writer,
     )
+
+
+def run_vampi_flow(
+    session: requests.Session,
+    target: Target,
+    request_writer: JsonlWriter,
+    hard_negative_writer: JsonlWriter,
+) -> None:
+    _request(
+        session=session,
+        target=target,
+        method="GET",
+        path="/users/v1",
+        params={"limit": 10},
+        body=None,
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+    _request(
+        session=session,
+        target=target,
+        method="GET",
+        path="/books/v1",
+        params=None,
+        body=None,
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+    _request(
+        session=session,
+        target=target,
+        method="POST",
+        path="/users/v1/register",
+        params=None,
+        body={"username": f"user_{uuid.uuid4().hex[:8]}", "password": "LabPass123!"},
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+
+
+def run_hasura_flow(
+    session: requests.Session,
+    target: Target,
+    request_writer: JsonlWriter,
+    hard_negative_writer: JsonlWriter,
+) -> None:
+    _request(
+        session=session,
+        target=target,
+        method="GET",
+        path="/healthz",
+        params=None,
+        body=None,
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+    _request(
+        session=session,
+        target=target,
+        method="POST",
+        path="/v1/graphql",
+        params=None,
+        body={"query": "query { __typename }"},
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+    _request(
+        session=session,
+        target=target,
+        method="POST",
+        path="/v1/graphql",
+        params=None,
+        body={"query": "query { __schema { queryType { name } } }"},
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+
+
+def run_dvga_flow(
+    session: requests.Session,
+    target: Target,
+    request_writer: JsonlWriter,
+    hard_negative_writer: JsonlWriter,
+) -> None:
+    _request(
+        session=session,
+        target=target,
+        method="GET",
+        path="/",
+        params=None,
+        body=None,
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+    _request(
+        session=session,
+        target=target,
+        method="POST",
+        path="/graphql",
+        params=None,
+        body={"query": "{ __typename }"},
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
+    _request(
+        session=session,
+        target=target,
+        method="POST",
+        path="/graphql",
+        params=None,
+        body={"query": "{ pastes { id title } }"},
+        request_writer=request_writer,
+        hard_negative_writer=hard_negative_writer,
+    )
     _request(
         session=session,
         target=target,
@@ -237,21 +397,25 @@ def main() -> None:
         "/lab-artifacts/hard_negatives/legit_hard_negatives.jsonl",
     )
 
-    targets = {
-        "juice": Target("juice_shop", os.getenv("GW_JUICE_URL", "http://gateway-juice:8080").rstrip("/")),
-        "httpbin": Target("httpbin", os.getenv("GW_HTTPBIN_URL", "http://gateway-httpbin:8080").rstrip("/")),
-        "petstore": Target("petstore", os.getenv("GW_PETSTORE_URL", "http://gateway-petstore:8080").rstrip("/")),
-    }
+    targets = load_legit_targets()
 
     request_writer = JsonlWriter(request_log)
     hard_negative_writer = JsonlWriter(hard_negative_log)
 
     sessions = [requests.Session() for _ in range(concurrency)]
-    flows = [
-        ("juice", run_juice_flow),
-        ("httpbin", run_httpbin_flow),
-        ("petstore", run_petstore_flow),
-    ]
+    flow_map = {
+        "juice": run_juice_flow,
+        "juice_shop": run_juice_flow,
+        "httpbin": run_httpbin_flow,
+        "petstore": run_petstore_flow,
+        "vampi": run_vampi_flow,
+        "hasura": run_hasura_flow,
+        "dvga": run_dvga_flow,
+    }
+    flows: list[tuple[Target, object]] = []
+    for target in targets.values():
+        flow = flow_map.get(target.flow, run_httpbin_flow)
+        flows.append((target, flow))
 
     started = time.time()
     duration_seconds = int(duration_minutes * 60)
@@ -259,15 +423,15 @@ def main() -> None:
 
     print(
         f"[legit_traffic] start duration={duration_minutes}m rps={requests_per_second} "
-        f"concurrency={concurrency} output={request_log}"
+        f"concurrency={concurrency} targets={len(flows)} output={request_log}"
     )
 
     while int(time.time() - started) < duration_seconds:
         session = random.choice(sessions)
-        target_name, flow = random.choice(flows)
+        target, flow = random.choice(flows)
         flow(
             session,
-            targets[target_name],
+            target,
             request_writer=request_writer,
             hard_negative_writer=hard_negative_writer,
         )

@@ -13,6 +13,10 @@ def test_metadata_helpers_defaults() -> None:
     assert build_dataset_mod._scenario_type_from_source_family("dast_zap") == "scanner_dast"
     assert build_dataset_mod._scenario_type_from_source_family("agent_strix") == "agent_attack"
     assert build_dataset_mod._scenario_type_from_source_family("synthetic") == "legit_background"
+    assert build_dataset_mod._scenario_type_from_source_family("public_flow") == "public_flow_dataset"
+    assert build_dataset_mod._scenario_type_from_source_family("public_benign") == "public_benign_dataset"
+    assert build_dataset_mod._scenario_type_from_source_family("vuln_feed") == "vuln_intel_seed"
+    assert build_dataset_mod._scenario_type_from_source_family("waf_rules") == "waf_rule_seed"
     assert build_dataset_mod._scenario_type_from_source_family("unknown") == "unknown"
 
     assert build_dataset_mod._validation_tier_from_confidence(0.95) == "gold"
@@ -108,3 +112,12 @@ def test_build_dataset_writes_new_metadata_and_manifest(monkeypatch, tmp_path) -
     assert manifest["lab_run_id"] == "lab_run_123"
     assert "scenario_types" in manifest["distributions"]
     assert "validation_tiers" in manifest["distributions"]
+
+
+def test_build_dataset_requires_full_static_sources() -> None:
+    try:
+        build_dataset_mod.build_dataset(require_static_full=True, normal_count=0, attack_ratio=0.5)
+    except ValueError as exc:
+        assert "required sources are missing" in str(exc).lower()
+    else:
+        raise AssertionError("Expected ValueError when --require-static-full is enabled.")

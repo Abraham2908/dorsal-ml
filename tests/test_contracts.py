@@ -25,6 +25,12 @@ def test_source_family_mapping() -> None:
     assert source_family("synthetic_fintech") == "synthetic"
     assert source_family("BurpSuite") == "dast_burp"
     assert source_family("OWASP_ZAP") == "dast_zap"
+    assert source_family("UNSW-NB15") == "public_flow"
+    assert source_family("CIC-IDS") == "public_flow"
+    assert source_family("CommonCrawl") == "public_benign"
+    assert source_family("ModSecurity-CRS") == "waf_rules"
+    assert source_family("NVD-CVE") == "vuln_feed"
+    assert source_family("OWASP Juice Shop") == "lab_app"
 
 
 def test_make_split_key_format() -> None:

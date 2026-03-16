@@ -17,6 +17,14 @@ ZAP_FILE="${ZAP_FILE:-}"
 ACUNETIX_FILE="${ACUNETIX_FILE:-}"
 STRIX_RUNS_DIR="${STRIX_RUNS_DIR:-}"
 SHANNON_SESSIONS_DIR="${SHANNON_SESSIONS_DIR:-}"
+UNSW_NB15_DIR="${UNSW_NB15_DIR:-${DATA_DIR}/academic/UNSW-NB15}"
+CIC_IDS_DIR="${CIC_IDS_DIR:-${DATA_DIR}/academic/CIC-IDS}"
+JUICESHOP_TRAFFIC_DIR="${JUICESHOP_TRAFFIC_DIR:-${DATA_DIR}/raw/static/juiceshop}"
+DVWA_TRAFFIC_DIR="${DVWA_TRAFFIC_DIR:-${DATA_DIR}/raw/static/dvwa}"
+MODSEC_CRS_DIR="${MODSEC_CRS_DIR:-${DATA_DIR}/coreruleset}"
+NVD_SNAPSHOT_FILE="${NVD_SNAPSHOT_FILE:-${DATA_DIR}/nvd/nvd_api_snapshot.json}"
+COMMONCRAWL_DIR="${COMMONCRAWL_DIR:-${DATA_DIR}/commoncrawl}"
+STATIC_PROFILE="${STATIC_PROFILE:-classic}"
 TARGET_APP="${TARGET_APP:-unknown}"
 LAB_RUN_ID="${LAB_RUN_ID:-}"
 IS_REPLAY="${IS_REPLAY:-0}"
@@ -81,13 +89,53 @@ fi
 BUILD_SOURCE_ARGS=()
 ATTACK_SOURCE_COUNT=0
 
-if [ -d "${PAYLOADS_DIR}" ]; then
+if [ "${STATIC_PROFILE}" = "full" ]; then
+  BUILD_SOURCE_ARGS+=(--require-static-full)
   BUILD_SOURCE_ARGS+=(--payloads-dir "${PAYLOADS_DIR}")
-  ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
-fi
-if [ -d "${SECLISTS_DIR}" ]; then
   BUILD_SOURCE_ARGS+=(--seclists-dir "${SECLISTS_DIR}")
-  ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  BUILD_SOURCE_ARGS+=(--unsw-nb15-dir "${UNSW_NB15_DIR}")
+  BUILD_SOURCE_ARGS+=(--cic-ids-dir "${CIC_IDS_DIR}")
+  BUILD_SOURCE_ARGS+=(--juiceshop-traffic-dir "${JUICESHOP_TRAFFIC_DIR}")
+  BUILD_SOURCE_ARGS+=(--dvwa-traffic-dir "${DVWA_TRAFFIC_DIR}")
+  BUILD_SOURCE_ARGS+=(--modsec-crs-dir "${MODSEC_CRS_DIR}")
+  BUILD_SOURCE_ARGS+=(--nvd-snapshot-file "${NVD_SNAPSHOT_FILE}")
+  BUILD_SOURCE_ARGS+=(--commoncrawl-dir "${COMMONCRAWL_DIR}")
+else
+  if [ -d "${PAYLOADS_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--payloads-dir "${PAYLOADS_DIR}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -d "${SECLISTS_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--seclists-dir "${SECLISTS_DIR}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -d "${UNSW_NB15_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--unsw-nb15-dir "${UNSW_NB15_DIR}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -d "${CIC_IDS_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--cic-ids-dir "${CIC_IDS_DIR}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -d "${JUICESHOP_TRAFFIC_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--juiceshop-traffic-dir "${JUICESHOP_TRAFFIC_DIR}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -d "${DVWA_TRAFFIC_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--dvwa-traffic-dir "${DVWA_TRAFFIC_DIR}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -d "${MODSEC_CRS_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--modsec-crs-dir "${MODSEC_CRS_DIR}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -f "${NVD_SNAPSHOT_FILE}" ]; then
+    BUILD_SOURCE_ARGS+=(--nvd-snapshot-file "${NVD_SNAPSHOT_FILE}")
+    ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
+  fi
+  if [ -d "${COMMONCRAWL_DIR}" ]; then
+    BUILD_SOURCE_ARGS+=(--commoncrawl-dir "${COMMONCRAWL_DIR}")
+  fi
 fi
 if [ -n "${BURP_FILE}" ] && [ -f "${BURP_FILE}" ]; then
   BUILD_SOURCE_ARGS+=(--burp-file "${BURP_FILE}")
@@ -110,10 +158,10 @@ if [ -n "${SHANNON_SESSIONS_DIR}" ] && [ -d "${SHANNON_SESSIONS_DIR}" ]; then
   ATTACK_SOURCE_COUNT=$((ATTACK_SOURCE_COUNT + 1))
 fi
 
-if [ "${ATTACK_SOURCE_COUNT}" -eq 0 ]; then
+if [ "${ATTACK_SOURCE_COUNT}" -eq 0 ] && [ "${STATIC_PROFILE}" != "full" ]; then
   echo "No attack sources found."
   echo "Run: make setup-data"
-  echo "Or set BURP_FILE/ZAP_FILE/ACUNETIX_FILE/STRIX_RUNS_DIR/SHANNON_SESSIONS_DIR."
+  echo "Or set attack-capable sources (payload repos, DAST exports, agent snapshots, static datasets)."
   exit 1
 fi
 
