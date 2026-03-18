@@ -1,0 +1,34 @@
+services:
+  dorsal-ml:
+    build: .
+    environment:
+      - CONTROL_PLANE_URL=${CONTROL_PLANE_URL}
+      - CONTROL_PLANE_ADMIN_EMAIL=${CONTROL_PLANE_ADMIN_EMAIL}
+      - CONTROL_PLANE_ADMIN_PASSWORD=${CONTROL_PLANE_ADMIN_PASSWORD}
+      - DORSAL_ML_API_KEY=${DORSAL_ML_API_KEY}
+      - TRAIN_MODE=${TRAIN_MODE:-all}
+      - DATA_DIR=/data
+      - MODELS_DIR=/models
+      - LOG_DIR=/logs
+    volumes:
+      - ./data:/data
+      - ./models:/models
+      - ./logs:/logs
+    ports:
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8090/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN_ML}
+    depends_on:
+      - dorsal-ml
+    restart: unless-stopped

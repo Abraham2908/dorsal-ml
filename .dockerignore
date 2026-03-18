@@ -1,0 +1,25 @@
+# Large data directories (mounted as volumes at runtime)
+data/
+models/
+logs/
+reports/
+dist/
+
+# Dev environment
+.venv/
+.git/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+
+# Lab and docs
+labs/
+docs/
+docs-examples/
+agents/
+
+# CI/IDE
+.claude/
+*.md
+Makefile

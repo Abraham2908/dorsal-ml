@@ -23,9 +23,38 @@ def fetch_telemetry_snapshot(
     output: str,
     input_path: str | None = None,
     fallback_synthetic: bool = True,
+    control_plane: bool = False,
 ) -> Path:
-    del host
+    """Fetch telemetry from a local file, the Control Plane API, or synthetic fallback.
+
+    Args:
+        host: Control Plane host URL (used when control_plane=True).
+        days: Unused legacy arg retained for API compatibility.
+        output: Output parquet path.
+        input_path: Optional local file (parquet/csv/tsv).
+        fallback_synthetic: If True, generate synthetic data when no source is available.
+        control_plane: If True, fetch live telemetry windows from the Control Plane API.
+    """
     del days
+
+    if control_plane:
+        try:
+            from dorsal_train.control_plane_client import fetch_training_windows
+            import os
+            os.environ.setdefault("CONTROL_PLANE_URL", host)
+            windows = fetch_training_windows(limit=10000)
+            if windows:
+                df = pd.DataFrame(windows)
+                out = Path(output)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                df.to_parquet(out, index=False)
+                logger.info(f"Control Plane telemetry fetched: {len(df)} rows → {out}")
+                return out
+            logger.warning("Control Plane returned no telemetry windows; falling back.")
+        except Exception as exc:
+            logger.warning(f"Control Plane fetch failed: {exc}; falling back.")
+        if not fallback_synthetic:
+            raise RuntimeError("Control Plane telemetry unavailable and synthetic fallback disabled.")
 
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +94,7 @@ def fetch_telemetry_snapshot(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch telemetry snapshot for Layer-3 training")
-    parser.add_argument("--host", required=True, help="ClickHouse host (kept for API compatibility)")
+    parser.add_argument("--host", required=True, help="Control Plane URL or legacy ClickHouse host")
     parser.add_argument("--days", type=int, default=14)
     parser.add_argument("--output", required=True, help="Output parquet path")
     parser.add_argument(
@@ -77,6 +106,11 @@ def main() -> None:
         action="store_true",
         help="Fail instead of generating synthetic data when no input source is provided.",
     )
+    parser.add_argument(
+        "--control-plane",
+        action="store_true",
+        help="Fetch live telemetry from the Dorsal Control Plane API at --host.",
+    )
     args = parser.parse_args()
 
     fetch_telemetry_snapshot(
@@ -85,6 +119,7 @@ def main() -> None:
         output=args.output,
         input_path=args.input,
         fallback_synthetic=not args.no_synthetic_fallback,
+        control_plane=args.control_plane,
     )
 
 
