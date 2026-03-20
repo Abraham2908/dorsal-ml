@@ -10,6 +10,7 @@ x-gateway-common: &gateway-common
   environment: &gateway-env
     DORSAL_CONTROL_URL: ${DORSAL_CONTROL_URL:-http://host.docker.internal:8000}
     DORSAL_TENANT_HASH: ${DORSAL_TENANT_HASH:-tenant_lab}
+    DORSAL_PROVISION_TOKEN: ${DORSAL_PROVISION_TOKEN}
     DORSAL_MODE: proxy
     DORSAL_FAIL_OPEN: "true"
     DORSAL_ENFORCEMENT_MODE: ${DORSAL_ENFORCEMENT_MODE:-detect}
@@ -134,8 +135,7 @@ services:
     environment:
       <<: *gateway-env
       DORSAL_UPSTREAM: http://vuln-juice-shop:3000
-      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_JUICE:?set_gateway_api_key}
-      DORSAL_GATEWAY_ID: gw_lab_juice
+      DORSAL_GATEWAY_NAME: gateway-juice
     ports:
       - "18081:8080"
     volumes:
@@ -152,8 +152,7 @@ services:
     environment:
       <<: *gateway-env
       DORSAL_UPSTREAM: http://vuln-vampi:5000
-      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_VAMPI:?set_gateway_api_key}
-      DORSAL_GATEWAY_ID: gw_lab_vampi
+      DORSAL_GATEWAY_NAME: gateway-vampi
     ports:
       - "18084:8080"
     volumes:
@@ -169,8 +168,7 @@ services:
     environment:
       <<: *gateway-env
       DORSAL_UPSTREAM: http://vuln-dvga:5013
-      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_DVGA:?set_gateway_api_key}
-      DORSAL_GATEWAY_ID: gw_lab_dvga
+      DORSAL_GATEWAY_NAME: gateway-dvga
     ports:
       - "18085:8080"
     volumes:
@@ -186,8 +184,7 @@ services:
     environment:
       <<: *gateway-env
       DORSAL_UPSTREAM: http://safe-httpbin:8080
-      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_HTTPBIN:?set_gateway_api_key}
-      DORSAL_GATEWAY_ID: gw_lab_httpbin
+      DORSAL_GATEWAY_NAME: gateway-httpbin
     ports:
       - "18082:8080"
     volumes:
@@ -203,8 +200,7 @@ services:
     environment:
       <<: *gateway-env
       DORSAL_UPSTREAM: http://safe-petstore:8080
-      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_PETSTORE:?set_gateway_api_key}
-      DORSAL_GATEWAY_ID: gw_lab_petstore
+      DORSAL_GATEWAY_NAME: gateway-petstore
     ports:
       - "18083:8080"
     volumes:
@@ -221,8 +217,7 @@ services:
     environment:
       <<: *gateway-env
       DORSAL_UPSTREAM: http://safe-hasura:8080
-      DORSAL_API_KEY: ${DORSAL_GATEWAY_API_KEY_HASURA:?set_gateway_api_key}
-      DORSAL_GATEWAY_ID: gw_lab_hasura
+      DORSAL_GATEWAY_NAME: gateway-hasura
     ports:
       - "18086:8080"
     volumes:
